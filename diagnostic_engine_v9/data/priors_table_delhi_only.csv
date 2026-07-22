@@ -1,0 +1,49 @@
+Student Class,operation,skill_name,p_mastered,n,n_mastered
+2,Addition,1D+1D sum upto 20,0.7923076923076923,130,103
+2,Addition,2-digit Addition with carry,0.5384615384615384,130,70
+2,Division,Division using Distribution,0.6384615384615384,130,83
+2,Multiplication,"Tables 1, 2 and 5",0.7,130,91
+2,Subtraction,10 to 19 - 1D,0.6307692307692307,130,82
+2,Subtraction,2-digit Subtraction with borrowing,0.4153846153846154,130,54
+3,Addition,1D+1D sum upto 20,0.7755255255255256,1332,1033
+3,Addition,2-digit Addition with carry,0.4174174174174174,1332,556
+3,Addition,3-digit Addition with carry,0.25975975975975973,1332,346
+3,Division,1D/2D by 1D without remainder,0.2980480480480481,1332,397
+3,Division,Division using Distribution,0.5262762762762763,1332,701
+3,Multiplication,2D x 2D,0.1373873873873874,1332,183
+3,Multiplication,"Tables 1, 2 and 5",0.6884384384384384,1332,917
+3,Subtraction,10 to 19 - 1D,0.6156156156156156,1332,820
+3,Subtraction,2-digit Subtraction with borrowing,0.27852852852852855,1332,371
+3,Subtraction,3-digit Subtraction with borrowing,0.1629129129129129,1332,217
+4,Addition,1D+1D sum upto 20,0.8372803666921314,1309,1096
+4,Addition,2-digit Addition with carry,0.5057295645530939,1309,662
+4,Addition,3-digit Addition with carry,0.33689839572192515,1309,441
+4,Addition,4-digit Addition with carry,0.2727272727272727,1309,357
+4,Division,1D/2D by 1D without remainder,0.36134453781512604,1309,473
+4,Division,4D by 1D with and without remainder,0.08479755538579067,1309,111
+4,Division,Division using Distribution,0.5355233002291826,1309,701
+4,Multiplication,2D x 2D,0.15813598166539344,1309,207
+4,Multiplication,3D x 2D,0.1497326203208556,1309,196
+4,Multiplication,"Tables 1, 2 and 5",0.7631779984721161,1309,999
+4,Subtraction,10 to 19 - 1D,0.680672268907563,1309,891
+4,Subtraction,2-digit Subtraction with borrowing,0.32238349885408707,1309,422
+4,Subtraction,3-digit Subtraction with borrowing,0.19480519480519481,1309,255
+4,Subtraction,4-digit Subtraction with borrowing,0.1497326203208556,1309,196
+5,Addition,1D+1D sum upto 20,0.8855547801814375,1433,1269
+5,Addition,2-digit Addition with carry,0.59804605722261,1433,857
+5,Addition,3-digit Addition with carry,0.43545010467550593,1433,624
+5,Addition,4-digit Addition with carry,0.3838101884159107,1433,550
+5,Addition,5-digit Addition with carry,0.2944870900209351,1433,422
+5,Division,1D/2D by 1D without remainder,0.43545010467550593,1433,624
+5,Division,2D/3D/4D/5D by 2D with and without remainder,0.08653175157013258,1433,124
+5,Division,4D by 1D with and without remainder,0.11025819958129798,1433,158
+5,Division,Division using Distribution,0.59804605722261,1433,857
+5,Multiplication,2D x 2D,0.2302861130495464,1433,330
+5,Multiplication,3D x 2D,0.19469644103279832,1433,279
+5,Multiplication,3D x 3D,0.15561758548499652,1433,223
+5,Multiplication,"Tables 1, 2 and 5",0.7871598046057222,1433,1128
+5,Subtraction,10 to 19 - 1D,0.7466852756454989,1433,1070
+5,Subtraction,2-digit Subtraction with borrowing,0.38799720865317516,1433,556
+5,Subtraction,3-digit Subtraction with borrowing,0.24563852058618282,1433,352
+5,Subtraction,4-digit Subtraction with borrowing,0.18492672714584787,1433,265
+5,Subtraction,5-digit Subtraction with borrowing,0.16329378925331473,1433,234

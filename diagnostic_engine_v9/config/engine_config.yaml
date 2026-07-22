@@ -1,0 +1,66 @@
+# Engine configuration for the AML dynamic diagnostic engine.
+#
+# This file is mounted at the path set by the ENGINE_CONFIG_PATH env var
+# (default: /etc/engine/config.yaml). It is loaded once at engine startup;
+# changes require a container restart.
+#
+# This is a SKELETON. The full 39-skill production list, the per-grade anchors,
+# and the per-(grade, skill) priors are populated by the seed CLI from the
+# canonical data sources (the milestone CSV, anchor_recommendations_v3.xlsx,
+# priors_table.csv). See the CLI step or the README for the workflow.
+
+version: "0.9.0"
+
+algorithm:
+  slip: 0.10
+  guess: 0.15
+  mastery_threshold: 0.95
+  not_mastered_threshold: 0.10
+  verification_trigger_high: 0.85
+  verification_trigger_low: 0.15
+  edge_propagation_value: 0.90
+  info_gain_edge_bonus: 0.5
+
+# Per-grade question budgets. Spec section 7.7.
+# G6, G7, G8 fall back to the G5 row (handled in engine/config.py).
+budgets:
+  2: { total: 25, per_operation: 6,  per_operation_cap_multiplier: 1.5, reserve_size: 7 }
+  3: { total: 42, per_operation: 9,  per_operation_cap_multiplier: 1.5, reserve_size: 11 }
+  4: { total: 59, per_operation: 13, per_operation_cap_multiplier: 1.5, reserve_size: 15 }
+  5: { total: 76, per_operation: 16, per_operation_cap_multiplier: 1.5, reserve_size: 19 }
+
+# Per-grade operation order. Multiplication-first for G2-G4, Division-first for G5
+# (spec section 7.5; the rationale is in the testing summary).
+operation_order:
+  2: [Multiplication, Addition, Subtraction, Division]
+  3: [Multiplication, Addition, Subtraction, Division]
+  4: [Multiplication, Addition, Subtraction, Division]
+  5: [Division, Addition, Subtraction, Multiplication]
+
+# Canonical 39 L2.5 skill list (spec Appendix C). This subset is just an
+# example shape; the seed CLI fills in the full list.
+skills:
+  - { name: "1D+1D sum upto 9", operation: Addition, sequence: 1, content_grade: 1 }
+  # ... 38 more skills
+
+# Per-(grade, operation) anchor skill. Populated from anchor_recommendations_v3.xlsx.
+anchors:
+  2: {}
+  3: {}
+  4: {}
+  5: {}
+
+# Per-(grade, skill) cohort prior. Populated from priors_table.csv.
+priors:
+  2: {}
+  3: {}
+  4: {}
+  5: {}
+
+# Misconception-coverage parameters (engine-wide; selection spec 3.5,
+# verdict-rule spec). Deployment-tunable.
+misconception:
+  target: 2              # floor asks per applicable misconception
+  conditional_extra: 0   # SHIPPED OFF (v8, selection spec 8a): adaptive extra disabled at deployment; code default stays 2
+  clear_threshold: 0.75  # accuracy >= this -> likely_absent
+  present_threshold: 0.50  # accuracy < this -> likely_present

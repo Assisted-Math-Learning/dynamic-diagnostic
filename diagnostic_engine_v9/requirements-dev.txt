@@ -1,0 +1,11 @@
+# Development-only dependencies. Not installed in the production Docker image.
+
+-r requirements.txt
+
+# Testing
+pytest==9.0.3
+httpx==0.28.1            # FastAPI TestClient transport
+mongomock==4.3.0         # in-process MongoDB substitute for storage tests
+
+# CLI (XLSX loaders for seed-config and seed-lattice)
+openpyxl==3.1.5

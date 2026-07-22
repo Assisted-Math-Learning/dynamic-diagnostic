@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aml-diagnostic-engine"
+version = "0.9.0"
+description = "Dynamic diagnostic engine for the AML (Adaptive Math Learning) product."
+requires-python = ">=3.11"
+authors = [{ name = "EkStep" }]
+license = { text = "Proprietary" }
+readme = "README.md"
+dependencies = [
+    "fastapi==0.136.3",
+    "uvicorn[standard]==0.48.0",
+    "pydantic==2.13.4",
+    "PyYAML==6.0.3",
+    "pymongo==4.17.0",
+    "structlog==25.5.0",
+    "prometheus-client==0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "httpx==0.28.1",
+    "mongomock==4.3.0",
+    "openpyxl==3.1.5",
+]
+cli = [
+    "openpyxl==3.1.5",
+]
+
+[project.scripts]
+aml-engine = "engine.cli:main"
+
+[tool.setuptools]
+packages = ["engine", "engine.api", "engine.observability", "engine.storage"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

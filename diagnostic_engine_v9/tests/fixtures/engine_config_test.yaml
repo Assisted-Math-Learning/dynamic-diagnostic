@@ -1,0 +1,61 @@
+# Minimal engine config for unit tests.
+# Production-shaped but small: 2 grades (G2, G3), 6 skills covering all 4 operations.
+# Tests use this to verify the YAML schema and the get_engine_params builder.
+
+version: "0.1.0-test"
+
+algorithm:
+  slip: 0.10
+  guess: 0.15
+  mastery_threshold: 0.95
+  not_mastered_threshold: 0.10
+  verification_trigger_high: 0.85
+  verification_trigger_low: 0.15
+  edge_propagation_value: 0.90
+  info_gain_edge_bonus: 0.5
+
+budgets:
+  2:
+    total: 25
+    per_operation: 6
+  3:
+    total: 42
+    per_operation: 9
+
+operation_order:
+  2: [Multiplication, Addition, Subtraction, Division]
+  3: [Multiplication, Addition, Subtraction, Division]
+
+skills:
+  - { name: "1D+1D sum upto 9",          operation: Addition,        sequence: 1, content_grade: 1 }
+  - { name: "2-digit Addition with carry", operation: Addition,      sequence: 5, content_grade: 3 }
+  - { name: "1D - 0 to 9",                operation: Subtraction,    sequence: 1, content_grade: 1 }
+  - { name: "Repeated addition",          operation: Multiplication, sequence: 1, content_grade: 2 }
+  - { name: "Tables 1 to 9",              operation: Multiplication, sequence: 3, content_grade: 3 }
+  - { name: "Division using Distribution", operation: Division,      sequence: 1, content_grade: 2 }
+
+anchors:
+  2:
+    Addition: "1D+1D sum upto 9"
+    Subtraction: "1D - 0 to 9"
+    Multiplication: "Repeated addition"
+    Division: "Division using Distribution"
+  3:
+    Addition: "1D+1D sum upto 9"
+    Subtraction: "1D - 0 to 9"
+    Multiplication: "Tables 1 to 9"
+    Division: "Division using Distribution"
+
+priors:
+  2:
+    "1D+1D sum upto 9": 0.85
+    "1D - 0 to 9": 0.85
+    "Repeated addition": 0.5
+    "Division using Distribution": 0.3
+  3:
+    "1D+1D sum upto 9": 0.95
+    "2-digit Addition with carry": 0.6
+    "1D - 0 to 9": 0.95
+    "Repeated addition": 0.85
+    "Tables 1 to 9": 0.5
+    "Division using Distribution": 0.5

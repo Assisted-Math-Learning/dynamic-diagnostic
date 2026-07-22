@@ -1,0 +1,57 @@
+﻿L2_5_sequence,qset_class,L1_skill,L2_5_skill,qset_purpose,count_of_total_diagnostic_qsets
+1,class-one,Addition,1D+1D sum upto 9,Micro Diagnostic,1
+2,class-one,Addition,1D+1D sum upto 20,Micro Diagnostic,1
+3,class-one,Addition,2D+1D sum up to 20,Exit Main Diagnostic,1
+4,class-one,Subtraction,1D - 0 to 9,Micro Diagnostic,1
+5,class-one,Subtraction,10 to 19 - 1D,Micro Diagnostic,1
+6,class-two,Numbers,Numbers to ones_Pictorial,Exit Main Diagnostic,1
+7,class-two,Numbers,Numbers to ones_Abstract,Exit Main Diagnostic,1
+8,class-two,Numbers,Ones to numbers_Pictorial,Exit Main Diagnostic,1
+9,class-two,Numbers,Ones to numbers_Abstract,Exit Main Diagnostic,1
+10,class-two,Numbers,Numbers to tens_Pictorial,Exit Main Diagnostic,1
+11,class-two,Numbers,Numbers to tens_Abstract,Exit Main Diagnostic,1
+12,class-two,Numbers,Tens to numbers_Pictorial,Exit Main Diagnostic,1
+13,class-two,Numbers,Tens to numbers_Abstract,Exit Main Diagnostic,1
+14,class-two,Numbers,Numbers to tens and ones_Pictorial,Exit Main Diagnostic,1
+15,class-two,Numbers,Numbers to tens and ones_Abstract,Exit Main Diagnostic,1
+16,class-two,Numbers,Tens and ones to numbers_Pictorial,Exit Main Diagnostic,1
+17,class-two,Numbers,Tens and ones to numbers_Abstract,Exit Main Diagnostic,1
+18,class-two,Numbers,Place value chart,Exit Main Diagnostic,1
+19,class-two,Addition,2-digit Addition without carry,Exit Main Diagnostic,1
+20,class-two,Addition,2-digit Addition with carry,Exit Main Diagnostic,1
+21,class-two,Addition_v1,2-digit Addition without carry,Micro Diagnostic,1
+22,class-two,Addition_v1,2-digit Addition with carry,Micro Diagnostic,1
+23,class-two,Subtraction_v1,2-digit Subtraction without borrowing,Micro Diagnostic,1
+24,class-two,Subtraction_v1,2-digit Subtraction with borrowing,Micro Diagnostic,1
+25,class-two,Subtraction,2-digit Subtraction without borrowing,Exit Main Diagnostic,1
+26,class-two,Subtraction,2-digit Subtraction with borrowing,Exit Main Diagnostic,1
+27,class-two,Multiplication,Repeated addition,Micro Diagnostic,1
+28,class-two,Multiplication,"Tables 1, 2 and 5",Exit Main Diagnostic,1
+29,class-two,Division,Division using Distribution,Micro Diagnostic,1
+30,class-three,Addition,3-digit Addition without carry,Micro Diagnostic,1
+31,class-three,Addition,3-digit Addition with carry,Micro Diagnostic,1
+32,class-three,Subtraction,3-digit Subtraction without borrowing,Micro Diagnostic,1
+33,class-three,Subtraction,3-digit Subtraction with borrowing,Micro Diagnostic,1
+34,class-three,Multiplication,Tables 1 to 9,Exit Main Diagnostic,1
+35,class-three,Multiplication,2D x 1D,Micro Diagnostic,2
+36,class-three,Multiplication,2D x 2D,Micro Diagnostic,1
+37,class-three,Division,Relationship between Multiplication and Division,Micro Diagnostic,1
+38,class-three,Division,1D/2D by 1D without remainder,Micro Diagnostic,1
+39,class-four,Addition,4-digit Addition without carry,Micro Diagnostic,1
+40,class-four,Addition,4-digit Addition with carry,Micro Diagnostic,1
+41,class-four,Subtraction,4-digit Subtraction without borrowing,Micro Diagnostic,1
+42,class-four,Subtraction,4-digit Subtraction with borrowing,Micro Diagnostic,1
+43,class-four,Multiplication,3D x 1D,Micro Diagnostic,1
+44,class-four,Multiplication,3D x 2D,Micro Diagnostic,1
+45,class-four,Division,3D by 1D without remainder,Micro Diagnostic,1
+46,class-four,Division,1D/2D/3D by 1D with remainder,Micro Diagnostic,1
+47,class-four,Division,4D by 1D with and without remainder,Micro Diagnostic,1
+48,class-five,Addition,5-digit Addition without carry,Micro Diagnostic,1
+49,class-five,Addition,5-digit Addition with carry,Micro Diagnostic,1
+50,class-five,Subtraction,5-digit Subtraction without borrowing,Micro Diagnostic,1
+51,class-five,Subtraction,5-digit Subtraction with borrowing,Micro Diagnostic,1
+52,class-five,Multiplication,4D/5D x 1D,Micro Diagnostic,1
+53,class-five,Multiplication,4D x 2D,Micro Diagnostic,1
+54,class-five,Multiplication,3D x 3D,Micro Diagnostic,1
+55,class-five,Division,5D by 1D with and without remainder,Micro Diagnostic,1
+56,class-five,Division,2D/3D/4D/5D by 2D with and without remainder,Micro Diagnostic,1

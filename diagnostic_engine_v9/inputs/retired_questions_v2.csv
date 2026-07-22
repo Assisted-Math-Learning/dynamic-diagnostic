@@ -1,0 +1,28 @@
+scope,key,reason,retired_date
+item,Addition|2-digit Addition with carry|Fib||37|7,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||4|46,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||53|7,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||54|9,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||5|55,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||6|36,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||6|66,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Addition|2-digit Addition with carry|Fib||78|9,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||18|9,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||27|8,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||32|6,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||40|4,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||52|5,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||55|6,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||67|9,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||72|8,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||83|8,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Subtraction|2-digit Subtraction with borrowing|Fib||90|6,grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration,2026-06-08
+item,Division|Division using Distribution|Fib||4|2,"duplicate of a kept item sharing (L1 skill, Q Type, N1, N2) under a different L2.5 skill; retired to de-duplicate the served pool, calibration retained",2026-06-17
+item,Division|Relationship between Multiplication and Division|Fib||6|3,"duplicate of a kept item sharing (L1 skill, Q Type, N1, N2) under a different L2.5 skill; retired to de-duplicate the served pool, calibration retained",2026-06-17
+item,Multiplication|Repeated addition|Fib||3|3,"duplicate of a kept item sharing (L1 skill, Q Type, N1, N2) under a different L2.5 skill; retired to de-duplicate the served pool, calibration retained",2026-06-17
+item,Multiplication|Tables 1 to 9|Fib||5|9,"duplicate of a kept item sharing (L1 skill, Q Type, N1, N2) under a different L2.5 skill; retired to de-duplicate the served pool, calibration retained",2026-06-17
+item,Multiplication|Repeated addition|Fib||2|4,uncalibrated Private-tenant Repeated-addition item; retired from the served pool per content review,2026-06-17
+item,Multiplication|Repeated addition|Fib||2|7,uncalibrated Private-tenant Repeated-addition item; retired from the served pool per content review,2026-06-17
+item,Multiplication|Repeated addition|Fib||2|9,uncalibrated Private-tenant Repeated-addition item; retired from the served pool per content review,2026-06-17
+item,Multiplication|Repeated addition|Fib||5|3,uncalibrated Private-tenant Repeated-addition item; retired from the served pool per content review,2026-06-17
+item,Multiplication|Repeated addition|Fib||5|5,uncalibrated Private-tenant Repeated-addition item; retired from the served pool per content review,2026-06-17

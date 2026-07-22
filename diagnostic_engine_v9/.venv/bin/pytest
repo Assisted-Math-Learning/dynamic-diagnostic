@@ -1,0 +1,6 @@
+#!/Users/shivamyadav/Desktop/v9_engine_integration_bundle/diagnostic_engine_v9/.venv/bin/python3.12
+import sys
+from pytest import console_main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(console_main())

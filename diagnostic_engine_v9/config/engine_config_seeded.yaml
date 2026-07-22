@@ -1,0 +1,303 @@
+version: 0.7.0
+algorithm:
+  slip: 0.1
+  guess: 0.15
+  mastery_threshold: 0.95
+  not_mastered_threshold: 0.1
+  verification_trigger_high: 0.85
+  verification_trigger_low: 0.15
+  edge_propagation_value: 0.9
+  info_gain_edge_bonus: 0.5
+misconception:
+  target: 2
+  conditional_extra: 2
+  clear_threshold: 0.75
+  present_threshold: 0.5
+budgets:
+  2:
+    total: 25
+    per_operation: 6
+    per_operation_cap_multiplier: 1.5
+    reserve_size: 7
+  3:
+    total: 42
+    per_operation: 9
+    per_operation_cap_multiplier: 1.5
+    reserve_size: 11
+  4:
+    total: 59
+    per_operation: 13
+    per_operation_cap_multiplier: 1.5
+    reserve_size: 15
+  5:
+    total: 76
+    per_operation: 16
+    per_operation_cap_multiplier: 1.5
+    reserve_size: 19
+operation_order:
+  2:
+  - Multiplication
+  - Addition
+  - Subtraction
+  - Division
+  3:
+  - Multiplication
+  - Addition
+  - Subtraction
+  - Division
+  4:
+  - Multiplication
+  - Addition
+  - Subtraction
+  - Division
+  5:
+  - Division
+  - Addition
+  - Subtraction
+  - Multiplication
+skills:
+- name: 1D+1D sum upto 9
+  operation: Addition
+  sequence: 1
+  content_grade: 1
+- name: 1D+1D sum upto 20
+  operation: Addition
+  sequence: 2
+  content_grade: 1
+- name: 2D+1D sum up to 20
+  operation: Addition
+  sequence: 3
+  content_grade: 1
+- name: 1D - 0 to 9
+  operation: Subtraction
+  sequence: 4
+  content_grade: 1
+- name: 10 to 19 - 1D
+  operation: Subtraction
+  sequence: 5
+  content_grade: 1
+- name: 2-digit Addition without carry
+  operation: Addition
+  sequence: 19
+  content_grade: 2
+- name: 2-digit Addition with carry
+  operation: Addition
+  sequence: 20
+  content_grade: 2
+- name: 2-digit Subtraction without borrowing
+  operation: Subtraction
+  sequence: 25
+  content_grade: 2
+- name: 2-digit Subtraction with borrowing
+  operation: Subtraction
+  sequence: 26
+  content_grade: 2
+- name: Repeated addition
+  operation: Multiplication
+  sequence: 27
+  content_grade: 2
+- name: Tables 1, 2 and 5
+  operation: Multiplication
+  sequence: 28
+  content_grade: 2
+- name: Division using Distribution
+  operation: Division
+  sequence: 29
+  content_grade: 2
+- name: 3-digit Addition without carry
+  operation: Addition
+  sequence: 30
+  content_grade: 3
+- name: 3-digit Addition with carry
+  operation: Addition
+  sequence: 31
+  content_grade: 3
+- name: 3-digit Subtraction without borrowing
+  operation: Subtraction
+  sequence: 32
+  content_grade: 3
+- name: 3-digit Subtraction with borrowing
+  operation: Subtraction
+  sequence: 33
+  content_grade: 3
+- name: Tables 1 to 9
+  operation: Multiplication
+  sequence: 34
+  content_grade: 3
+- name: 2D x 1D
+  operation: Multiplication
+  sequence: 35
+  content_grade: 3
+- name: 2D x 2D
+  operation: Multiplication
+  sequence: 36
+  content_grade: 3
+- name: Relationship between Multiplication and Division
+  operation: Division
+  sequence: 37
+  content_grade: 3
+- name: 1D/2D by 1D without remainder
+  operation: Division
+  sequence: 38
+  content_grade: 3
+- name: 4-digit Addition without carry
+  operation: Addition
+  sequence: 39
+  content_grade: 4
+- name: 4-digit Addition with carry
+  operation: Addition
+  sequence: 40
+  content_grade: 4
+- name: 4-digit Subtraction without borrowing
+  operation: Subtraction
+  sequence: 41
+  content_grade: 4
+- name: 4-digit Subtraction with borrowing
+  operation: Subtraction
+  sequence: 42
+  content_grade: 4
+- name: 3D x 1D
+  operation: Multiplication
+  sequence: 43
+  content_grade: 4
+- name: 3D x 2D
+  operation: Multiplication
+  sequence: 44
+  content_grade: 4
+- name: 3D by 1D without remainder
+  operation: Division
+  sequence: 45
+  content_grade: 4
+- name: 1D/2D/3D by 1D with remainder
+  operation: Division
+  sequence: 46
+  content_grade: 4
+- name: 4D by 1D with and without remainder
+  operation: Division
+  sequence: 47
+  content_grade: 4
+- name: 5-digit Addition without carry
+  operation: Addition
+  sequence: 48
+  content_grade: 5
+- name: 5-digit Addition with carry
+  operation: Addition
+  sequence: 49
+  content_grade: 5
+- name: 5-digit Subtraction without borrowing
+  operation: Subtraction
+  sequence: 50
+  content_grade: 5
+- name: 5-digit Subtraction with borrowing
+  operation: Subtraction
+  sequence: 51
+  content_grade: 5
+- name: 4D/5D x 1D
+  operation: Multiplication
+  sequence: 52
+  content_grade: 5
+- name: 4D x 2D
+  operation: Multiplication
+  sequence: 53
+  content_grade: 5
+- name: 3D x 3D
+  operation: Multiplication
+  sequence: 54
+  content_grade: 5
+- name: 5D by 1D with and without remainder
+  operation: Division
+  sequence: 55
+  content_grade: 5
+- name: 2D/3D/4D/5D by 2D with and without remainder
+  operation: Division
+  sequence: 56
+  content_grade: 5
+anchors:
+  2:
+    Addition: 2-digit Addition with carry
+    Division: Division using Distribution
+    Multiplication: Tables 1, 2 and 5
+    Subtraction: 2-digit Subtraction with borrowing
+  3:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+  4:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+  5:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+  6:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+  7:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+  8:
+    Addition: 2-digit Addition with carry
+    Division: 1D/2D by 1D without remainder
+    Multiplication: 2D x 2D
+    Subtraction: 2-digit Subtraction with borrowing
+priors:
+  2:
+    1D+1D sum upto 20: 0.7923076923076923
+    2-digit Addition with carry: 0.5384615384615384
+    Division using Distribution: 0.6384615384615384
+    Tables 1, 2 and 5: 0.7
+    10 to 19 - 1D: 0.6307692307692307
+    2-digit Subtraction with borrowing: 0.4153846153846154
+  3:
+    1D+1D sum upto 20: 0.7755255255255256
+    2-digit Addition with carry: 0.4174174174174174
+    3-digit Addition with carry: 0.25975975975975973
+    1D/2D by 1D without remainder: 0.2980480480480481
+    Division using Distribution: 0.5262762762762763
+    2D x 2D: 0.1373873873873874
+    Tables 1, 2 and 5: 0.6884384384384384
+    10 to 19 - 1D: 0.6156156156156156
+    2-digit Subtraction with borrowing: 0.27852852852852855
+    3-digit Subtraction with borrowing: 0.1629129129129129
+  4:
+    1D+1D sum upto 20: 0.8372803666921314
+    2-digit Addition with carry: 0.5057295645530939
+    3-digit Addition with carry: 0.33689839572192515
+    4-digit Addition with carry: 0.2727272727272727
+    1D/2D by 1D without remainder: 0.36134453781512604
+    4D by 1D with and without remainder: 0.08479755538579067
+    Division using Distribution: 0.5355233002291826
+    2D x 2D: 0.15813598166539344
+    3D x 2D: 0.1497326203208556
+    Tables 1, 2 and 5: 0.7631779984721161
+    10 to 19 - 1D: 0.680672268907563
+    2-digit Subtraction with borrowing: 0.32238349885408707
+    3-digit Subtraction with borrowing: 0.19480519480519481
+    4-digit Subtraction with borrowing: 0.1497326203208556
+  5:
+    1D+1D sum upto 20: 0.8855547801814375
+    2-digit Addition with carry: 0.59804605722261
+    3-digit Addition with carry: 0.43545010467550593
+    4-digit Addition with carry: 0.3838101884159107
+    5-digit Addition with carry: 0.2944870900209351
+    1D/2D by 1D without remainder: 0.43545010467550593
+    2D/3D/4D/5D by 2D with and without remainder: 0.08653175157013258
+    4D by 1D with and without remainder: 0.11025819958129798
+    Division using Distribution: 0.59804605722261
+    2D x 2D: 0.2302861130495464
+    3D x 2D: 0.19469644103279832
+    3D x 3D: 0.15561758548499652
+    Tables 1, 2 and 5: 0.7871598046057222
+    10 to 19 - 1D: 0.7466852756454989
+    2-digit Subtraction with borrowing: 0.38799720865317516
+    3-digit Subtraction with borrowing: 0.24563852058618282
+    4-digit Subtraction with borrowing: 0.18492672714584787
+    5-digit Subtraction with borrowing: 0.16329378925331473
