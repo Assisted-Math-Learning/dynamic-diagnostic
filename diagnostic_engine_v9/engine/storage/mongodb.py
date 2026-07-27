@@ -67,7 +67,7 @@ class MongoStorage(StorageBackend):
         if mongo_client is not None:
             self._client = mongo_client
         elif mongo_url is not None:
-            self._client = MongoClient(mongo_url)
+            self._client = MongoClient(mongo_url, tz_aware=True, tzinfo=timezone.utc)
         else:
             raise ValueError("either mongo_url or mongo_client must be provided")
         self._db = self._client[database_name]
