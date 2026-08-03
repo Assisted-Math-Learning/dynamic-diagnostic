@@ -84,7 +84,7 @@ Plus a small **build report** listing: items with no calibration match, items dr
 
 The base `question_x_id` is consistent across tenants, so this is not ID translation. The lookup is per-tenant because (a) the active set of questions differs by tenant, and (b) within a tenant one `item` can map to several `question_x_id`s. The lookup absorbs both.
 
-**Data reality (the build machinery runs against multi-tenant data from day one).** The shared workbook is already multi-tenant: Private (3,134 rows), Karnataka (1,909), Telangana (1,863), Delhi (1,699); 8,605 data rows in total. So the per-tenant build and resolution are exercised immediately, not only in some future state. Tenant coverage of the calibrated item set is uneven: Delhi carries 613 of the 638 calibrated items, while Karnataka, Private, and Telangana each carry all 638. This unevenness is the concrete reason the tenant-availability filter (Section 7.2, step 3) is required.
+**Data reality (the build machinery runs against multi-tenant data from day one).** The shared workbook is already multi-tenant: Private (3,134 rows), Karnataka (1,909), Telangana (1,863), Delhi (1,699); 8,605 data rows in total. So the per-tenant build and resolution are exercised immediately, not only in some future state. Tenant coverage of the calibrated item set is uneven: of the 667 calibrated items, Delhi serves 595, Karnataka 649, Private 646, and Telangana 646 (650 distinct items are served across all tenants, and 594 are served by all four). No tenant carries the full set. This unevenness is the concrete reason the tenant-availability filter (Section 7.2, step 3) is required.
 
 ---
 
@@ -203,7 +203,7 @@ Exclude a candidate if **either** its `item` matches an `item`-scope entry **or*
 
 ### 6.5 The current retirements
 
-18 questions are retired now, all `item` scope, reason "grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration", `retired_date` 2026-06-08. These are content-level retirements: their calibration data stays in `question_parameters.csv` and is unchanged.
+27 questions are retired now, all `item` scope, in two batches. The first 18 (`retired_date` 2026-06-08, reason "grey-area validity: solvable without the tagged skill (finger-counting vs the formal procedure); retained for calibration") are content-level retirements whose calibration data stays in `question_parameters.csv` unchanged. A second batch of 9 (`retired_date` 2026-06-17) removes 4 duplicate items (each shares its L1 skill, Q Type, N1, and N2 with a kept item under a different L2.5 skill; calibration retained on the kept item) and 5 uncalibrated Private-tenant Repeated-addition items. So the "calibration unchanged" statement holds for the 18 grey-area retirements but not universally; the engine's `retirement_guard.py` enforces a `DECALIBRATED_ALLOWLIST` of 10 `item` keys permitted to be absent from the 667-item calibration set.
 
 ---
 
@@ -223,7 +223,7 @@ The existing pool (per `csv_question_pool_spec.md`) does six steps and returns a
 
 1. Enumerate candidate `item`s for the skill from `question_parameters.csv` (unchanged).
 2. **Apply the retired-list filter** (new, Section 6.3): drop retired `item`s and any candidate whose resolved `question_x_id` is retired.
-3. **Apply the tenant-availability filter** (new): drop any candidate `item` that the session tenant's lookup cannot resolve to a `question_x_id`. This is essential because tenant coverage of the calibrated item set is partial (Delhi carries only 613 of 638 calibrated items; the other three tenants carry all 638; see Section 6.4). Filtering here means the discrimination window in step 5 only ever sees items this tenant can actually serve, so a Delhi session never picks one of the 25 Delhi-missing items and then fails, as long as the skill has any other Delhi-available question.
+3. **Apply the tenant-availability filter** (new): drop any candidate `item` that the session tenant's lookup cannot resolve to a `question_x_id`. This is essential because tenant coverage of the calibrated item set is partial (Delhi carries only 595 of 667 calibrated items; the other tenants carry more but none carries all - Karnataka 649, Private 646, Telangana 646; see Section 4.4). Filtering here means the discrimination window in step 5 only ever sees items this tenant can actually serve, so a Delhi session never picks one of the 72 Delhi-missing items and then fails, as long as the skill has any other Delhi-available question.
 4. No-repeat on `item` (unchanged).
 5. Resolve parameters at the learner's grade (unchanged).
 6. Discrimination window + floor (unchanged), now applied to the tenant-available candidates only.

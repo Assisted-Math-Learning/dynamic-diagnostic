@@ -2,6 +2,8 @@
 
 This is the production prototype for the AML (Adaptive Math Learning) dynamic diagnostic engine. The service maintains Bayesian posteriors over a learner's L2.5 math skills as they answer questions, picks the next question via lattice propagation and information-gain routing, and returns a three-band verdict (`confident_mastered` / `confident_not_mastered` / `uncertain`) per skill.
 
+> **Current engine state (0.10.0, 668 tests).** Since this README was written for the v9 baseline (0.9.0, 597 tests), the mixed-mode (online/offline switching) and deactivation-failsafe work has landed, taking the engine to **0.10.0 with 668 tests passing**. The version and test-count figures in this document are refreshed to that state. The endpoint reference, error table, and internals (Sections 3, 6, 8) are refreshed to v10. The authoritative per-endpoint request/response field schemas live in the v10 core docs now shipped under `specs/` (`Dynamic_Diagnostic_Engine_Spec_v10.md`, Section 5); this README summarizes them. The historical `597 tests` figure for the v9 baseline is retained where noted.
+
 This README is written for the engineering team that will deploy and operate the service. Sections are ordered roughly by what you'll need first: install, run, configure, integrate, then deeper detail on internals.
 
 ---
@@ -10,7 +12,7 @@ This README is written for the engineering team that will deploy and operate the
 
 | Component | Where |
 |---|---|
-| FastAPI service with 6 endpoints (3 POST + 3 GET) | `engine/api/` |
+| FastAPI service with 10 endpoints (5 POST + 5 GET) | `engine/api/` |
 | Engine core: Bayesian update, lattice propagation, routing, verdict assignment | `engine/{bayes,lattice,routing,verdicts,session}.py` |
 | Storage layer (pluggable in-memory + MongoDB backends) | `engine/storage/` |
 | Configuration loader (Pydantic + YAML) | `engine/config.py` |
@@ -18,7 +20,7 @@ This README is written for the engineering team that will deploy and operate the
 | CLI for seeding the config, seeding the lattice, simulating sessions, and validating config | `engine/cli.py` |
 | Dockerfile, smoke test, full test suite | `Dockerfile`, `scripts/smoke.py`, `tests/` |
 
-**597 unit + integration tests pass.** Run `pytest` to confirm.
+**668 unit + integration tests pass.** Run `pytest` to confirm.
 
 This delivers the dynamic diagnostic engine described in `dynamic_diagnostic_engine_spec.md`. The offline decision-tree path has shipped for Delhi G2-G5 (Section 11). The Numbers operation is intentionally excluded from scope (Section 9).
 
@@ -40,7 +42,7 @@ Python 3.11 or higher.
 
 ```bash
 pytest
-# Expected: 597 passed
+# Expected: 668 passed
 ```
 
 ### Seed the engine configuration from canonical data
@@ -62,7 +64,7 @@ The priors input must be the Delhi-only file (`priors_table_delhi_only.csv`). An
 ```bash
 python -m engine.cli validate-config --config config/engine_config.yaml
 # /path/to/engine_config.yaml: valid
-#   version          : 0.9.0
+#   version          : 0.10.0
 #   grades           : [2, 3, 4, 5]
 #   skills           : 39          # Delhi scope; 40 across all tenants
 #   ...
@@ -133,7 +135,7 @@ Every API response is wrapped in this shape (spec section 5.1):
 
 `error` is present only on failure. `responseCode` mirrors the HTTP status name (`OK`, `BAD_REQUEST`, `UNAUTHORIZED`, `NOT_FOUND`, `CONFLICT`, `INTERNAL_SERVER_ERROR`, `SERVICE_UNAVAILABLE`).
 
-`/health` returns a flat JSON object without the envelope — it's designed for Kubernetes probes.
+`/health` returns a flat JSON object without the envelope - it's designed for Kubernetes probes.
 
 ### Endpoints
 
@@ -141,8 +143,12 @@ Every API response is wrapped in this shape (spec section 5.1):
 |---|---|---|
 | POST | `/api/v1/diagnostic/session/start` | Create a session, return the first question |
 | POST | `/api/v1/diagnostic/session/{sub_session_id}/response` | Submit an answer, get the next question or verdicts if complete |
+| POST | `/api/v1/diagnostic/session/{sub_session_id}/offline-batch` | Ingest a completed offline segment into the one unified history, then return the next question or verdicts (mixed-mode) |
+| POST | `/api/v1/diagnostic/session/{sub_session_id}/replace-question` | Decline the offered question and get a different one; records nothing, spends no budget (deactivation failsafe) |
 | POST | `/api/v1/diagnostic/session/{sub_session_id}/end` | End a session early; return verdicts based on current state |
 | GET  | `/api/v1/diagnostic/session/{sub_session_id}/verdicts` | Re-fetch verdicts for a completed session |
+| GET  | `/api/v1/diagnostic/session/{sub_session_id}/responses` | Re-fetch the stored raw learner responses for a session (Stage B) |
+| GET  | `/api/v1/diagnostic/offline-tree/{tenant_id}/{grade}` | Fetch the serialized offline decision tree for a (tenant, grade) |
 | GET  | `/health` | Health probe |
 | GET  | `/metrics` | Prometheus scrape endpoint |
 
@@ -162,7 +168,9 @@ Every API response is wrapped in this shape (spec section 5.1):
 | `SESSION_NOT_FOUND` | 404 | Unknown `sub_session_id` |
 | `SESSION_NOT_COMPLETE` | 409 | GET /verdicts on an active session |
 | `RESPONSE_CONFLICT` | 409 | Same `question_x_id` submitted with a different `is_correct` |
-| `NO_TREE_FOR_GRADE` | 500 | Offline tree missing for the requested grade (Delhi G2-G5 ship; see Section 11) |
+| `OFFLINE_BATCH_TOO_LARGE` | 400 | Offline-batch ingest larger than twice the grade budget (corruption guard, mixed-mode) |
+| `NO_USABLE_QUESTION` | 422 | No usable question to start: the switched-off list covers all available questions for the grade (deactivation failsafe) |
+| `NO_TREE_FOR_GRADE` | 404 | Offline tree missing for the requested grade (Delhi G2-G5 ship; see Section 11) |
 | `VERDICTS_NOT_WRITTEN` | 500 | Complete session has no verdicts (cleanup job recovers within 5 min) |
 | `SESSION_LOCKED` | 503 | Reserved for v2 (concurrency control) |
 
@@ -179,24 +187,24 @@ The engine is driven entirely by environment variables and a single YAML file. S
 | `ENGINE_CONFIG_PATH` | Yes (prod) | `/etc/engine/config.yaml` | Path to `engine_config.yaml` |
 | `QUESTION_PARAMETERS_PATH` | Yes (prod) | `/etc/engine/question_parameters.csv` | Path to the calibration CSV that `CsvQuestionPool` reads (question ids + calibrated slip/guess). Startup fails if absent. |
 | `TENANT_QUESTION_LOOKUP_PATH` | No | (unset) | Optional path to `tenant_question_lookup.csv` (built offline). When set, the pool resolves tenant-scoped `question_x_id`s and filters to items the session tenant can serve. When unset, the pool uses the params `q_x_id` and ignores tenant (legacy mode). |
-| `RETIRED_LIST_PATH` | No | (unset) | Optional path to `retired_questions_v2.csv` (the canonical 27-item retired list), applied at enumeration as defence-in-depth (the build step already drops retired rows from the lookup). |
+| `RETIRED_LIST_PATH` | No | (unset) | Optional path to `retired_questions.csv`, applied at enumeration as defence-in-depth (the build step already drops retired rows from the lookup). |
 | `TENANT_TOKENS_JSON` | Yes (prod) | `{}` | JSON object: `{"tenant_id": "shared_secret_token"}` |
 | `STORAGE_BACKEND` | No | `memory` | `memory` or `mongodb`. Use `memory` only for local dev / smoke tests. |
-| `MONGODB_URL` | If using MongoDB | — | MongoDB connection string |
+| `MONGODB_URL` | If using MongoDB | - | MongoDB connection string |
 | `MONGODB_DATABASE` | If using MongoDB | `aml_engine` | Database name |
 | `ENGINE_VERSION` | No | `engine.__version__` | Version string stamped on every session document |
 | `ENGINE_PORT` | No | `4001` | Port (uvicorn) |
 | `LOG_LEVEL` | No | `info` | `debug` / `info` / `warn` / `error` |
 | `LOG_FORMAT` | No | `json` | `json` or `text` |
 | `STRICT_PRIORS_REQUIRED` | No | `false` | When `true`, the engine fails to start if any configured grade has no priors in `engine_config.yaml`. When `false` (default), the engine logs a WARN per missing grade and continues; `/health` reports the gap as `priors_missing_for_grades`. Set to `true` in production deployments where missing priors should block the rollout. |
-| `PROMETHEUS_PUSHGATEWAY_URL` | No | — | When set, the `cleanup` CLI pushes its job metrics to this Pushgateway (a one-shot CronJob can't be scraped directly). When unset, cleanup counts are in the logs only. |
+| `PROMETHEUS_PUSHGATEWAY_URL` | No | - | When set, the `cleanup` CLI pushes its job metrics to this Pushgateway (a one-shot CronJob can't be scraped directly). When unset, cleanup counts are in the logs only. |
 
 ### `engine_config.yaml` shape
 
 A skeleton lives at `config/engine_config.yaml`. The seed CLI populates it from canonical data sources. Structure:
 
 ```yaml
-version: "0.9.0"
+version: "0.10.0"
 
 algorithm:
   slip: 0.10                           # P(correct | not_mastered)
@@ -221,7 +229,7 @@ operation_order:
   5: [Division, Addition, Subtraction, Multiplication]
 
 skills:
-  - name: "1D+1D sum upto 9"
+ - name: "1D+1D sum upto 9"
     operation: Addition
     sequence: 1
     content_grade: 1
@@ -254,7 +262,7 @@ When a configured grade has no priors at all (an empty `priors[grade]` dict in t
 2. The `/health` endpoint includes `priors_missing_for_grades` (e.g. `[2]`).
 3. Setting `STRICT_PRIORS_REQUIRED=true` makes startup fail with a clear error when any grade has no priors. Recommended for production rollouts.
 
-With the canonical `priors_table_delhi_only.csv`, all four grades (G2-G5) have at least some Delhi priors, so the WARN does not fire for any grade. However, the Delhi diagnostic only tested about half of the in-scope skills at each grade (e.g. for G3, skills like "Repeated addition", "Tables 1 to 9", and "3-digit Addition without carry" have no Delhi data). Those untested skills silently fall back to the engine's 0.5 default prior. This is expected behaviour, not an error condition — the engine just lacks cohort-level evidence for those skills and will rely entirely on direct observation or lattice propagation during the session. The partial-coverage case is not surfaced by the existing WARN logic, which only catches grades with zero priors.
+With the canonical `priors_table_delhi_only.csv`, all four grades (G2-G5) have at least some Delhi priors, so the WARN does not fire for any grade. However, the Delhi diagnostic only tested about half of the in-scope skills at each grade (e.g. for G3, skills like "Repeated addition", "Tables 1 to 9", and "3-digit Addition without carry" have no Delhi data). Those untested skills silently fall back to the engine's 0.5 default prior. This is expected behaviour, not an error condition - the engine just lacks cohort-level evidence for those skills and will rely entirely on direct observation or lattice propagation during the session. The partial-coverage case is not surfaced by the existing WARN logic, which only catches grades with zero priors.
 
 ### The question pool (`CsvQuestionPool`)
 
@@ -289,7 +297,7 @@ At startup the pool is given the engine's configured scope skills and logs a lou
 ### Build the image
 
 ```bash
-docker build -t aml-diagnostic-engine:0.9.0 .
+docker build -t aml-diagnostic-engine:0.10.0 .
 ```
 
 The image:
@@ -309,7 +317,7 @@ docker run --rm \
     -e MONGODB_DATABASE=aml \
     -v $(pwd)/config/engine_config.yaml:/etc/engine/config.yaml:ro \
     -p 4001:4001 \
-    aml-diagnostic-engine:0.9.0
+    aml-diagnostic-engine:0.10.0
 ```
 
 For Kubernetes: mount `engine_config.yaml` via a ConfigMap, put `TENANT_TOKENS_JSON` in a Secret, and set `STORAGE_BACKEND=mongodb` with MongoDB connection details from a Secret as well.
@@ -328,9 +336,9 @@ Before promoting this prototype to production, the engineering team must address
 | 4 | **Set up Prometheus scraping.** | Point Prometheus at `:4001/metrics`. 12 business metrics are exposed; see spec section 9.1. |
 | 5 | **Schedule the cleanup CronJob.** | See Section 7 "Cleanup CronJob" for the YAML. Recommended cadence: every 5 minutes. |
 | 6 | **Validate the seeded config in CI.** | Add `python -m engine.cli validate-config --config config/engine_config.yaml` as a CI step so config changes can't ship broken. |
-| 7 | **Decide on `STRICT_PRIORS_REQUIRED`.** | Default is false (warn on grades with no priors at all). With the canonical `priors_table_delhi_only.csv`, all four configured grades have some Delhi data, so the WARN does not fire for any grade. Strict mode is therefore safe to enable today and recommended for production — it prevents an accidental config swap from silently producing a grade with zero priors. Note: partial coverage (skills with no Delhi data falling back to 0.5) is NOT caught by this check; that's a content-team coverage question, not a deployment blocker. |
+| 7 | **Decide on `STRICT_PRIORS_REQUIRED`.** | Default is false (warn on grades with no priors at all). With the canonical `priors_table_delhi_only.csv`, all four configured grades have some Delhi data, so the WARN does not fire for any grade. Strict mode is therefore safe to enable today and recommended for production - it prevents an accidental config swap from silently producing a grade with zero priors. Note: partial coverage (skills with no Delhi data falling back to 0.5) is NOT caught by this check; that's a content-team coverage question, not a deployment blocker. |
 
-### Pending engineering decisions (spec section 16)
+### Pending engineering decisions (v10 Engine Spec: open items in Sections 14/15, plus the pool/calibration items in Sections 7.8 and 6.2)
 
 Items 1-7 above are required for any production deployment. The 19 items below are spec-tracked decisions where the spec has assumed a default and engineering needs to either confirm, change, or defer. None block the prototype's correctness; all should be triaged before the pilot promotes to general availability.
 
@@ -425,35 +433,35 @@ spec:
         spec:
           restartPolicy: OnFailure
           containers:
-            - name: cleanup
-              image: aml-diagnostic-engine:0.9.0   # same image as the engine
+           - name: cleanup
+              image: aml-diagnostic-engine:0.10.0   # same image as the engine
               command:
-                - python
-                - "-m"
-                - engine.cli
-                - cleanup
-                - "--config"
-                - /etc/engine/config.yaml
-                - "--storage"
-                - mongodb
-                - "--limit"
-                - "200"
+               - python
+               - "-m"
+               - engine.cli
+               - cleanup
+               - "--config"
+               - /etc/engine/config.yaml
+               - "--storage"
+               - mongodb
+               - "--limit"
+               - "200"
               env:
-                - name: MONGODB_URL
+               - name: MONGODB_URL
                   valueFrom:
                     secretKeyRef: {name: engine-secrets, key: mongodb-url}
-                - name: MONGODB_DATABASE
+               - name: MONGODB_DATABASE
                   value: aml_engine
-                - name: LOG_FORMAT
+               - name: LOG_FORMAT
                   value: json
-                - name: PROMETHEUS_PUSHGATEWAY_URL
+               - name: PROMETHEUS_PUSHGATEWAY_URL
                   value: pushgateway.monitoring:9091   # omit to skip metric export
               volumeMounts:
-                - name: engine-config
+               - name: engine-config
                   mountPath: /etc/engine
                   readOnly: true
           volumes:
-            - name: engine-config
+           - name: engine-config
               configMap:
                 name: engine-config
 ```
@@ -481,27 +489,42 @@ engine/
 ├── bayes.py              # pure: Bayes update, P(correct|mastery)
 ├── lattice.py            # pure: LatticeEdge, LatticeIndex, propagate()
 ├── routing.py            # pure: RoutingConfig, info-gain score, pick_next_question
+├── coverage.py           # online next-question selection: phase controller
+│                         #   (base -> misconception backfill -> reserve harvest); calls routing
 ├── verdicts.py           # pure: assign_verdict (8-rule table from spec section 7.6)
+├── misconception.py      # misconception applicability + signal derivation (bands)
 ├── session.py            # orchestrator: start/record/end, only place state mutates
+├── history_scorer.py     # replay a full answer history through the engine's own
+│                         #   update/verdict functions (offline scoring, spec section 7.10)
+├── offline_ingest.py     # fold a completed offline segment into the one unified
+│                         #   history and recompute by full replay (mixed-mode)
+├── offline_registry.py   # offline-tree serving guard (tree_compat_version)
+├── retirement_guard.py   # decision-9 retain-calibration guard + decalibrated allow-list
+├── cleanup.py            # recompute verdicts for complete sessions missing them
 ├── config.py             # EngineConfig (Pydantic) + YAML loader + get_engine_params
 ├── question_pool.py      # QuestionPool ABC + StubQuestionPool + CsvQuestionPool
+│                         #   (tenant-aware; retired + switched-off/declined filters)
+├── stage_b_integration.py # Stage B (misconception classifier) integration helper
 ├── cli.py                # argparse-based subcommands
 ├── cli_io.py             # loaders for milestone CSV, priors CSV, anchors/lattice XLSX
 ├── api/
 │   ├── envelope.py       # success/error envelope wrappers
-│   ├── errors.py         # 13 error codes + HTTP mapping
+│   ├── errors.py         # 16 error codes + HTTP mapping
 │   ├── schemas.py        # Pydantic request/response models (extra='forbid' = PII guard)
 │   ├── auth.py           # X-Internal-Service-Token verification, constant-time compare
-│   ├── routes.py         # 6 endpoint handlers
+│   ├── middleware.py     # request middleware
+│   ├── routes.py         # 8 endpoint handlers (session start/response/end/offline-batch/
+│   │                     #   replace-question; verdicts/responses/offline-tree GET)
 │   └── main.py           # create_app(...) + create_app_from_env() + exception handlers
+│                         #   + /health + /metrics
 ├── observability/
 │   ├── logging.py        # structlog config + PII allow-list filter (spec section 9.3)
 │   └── metrics.py        # 12 Prometheus metrics via register_metrics(registry) factory
 └── storage/
     ├── interface.py      # StorageBackend ABC
     ├── memory.py         # InMemoryStorage (thread-safe, deep-copies)
-    ├── mongodb.py        # MongoDbStorage (PyMongo)
-    ├── documents.py      # Session / SkillVerdict / LatticeEdge <-> dict
+    ├── mongodb.py        # MongoStorage (PyMongo; tz-aware UTC datetimes)
+    ├── documents.py      # Session / SkillVerdict / LatticeEdge <-> dict (tz-normalized on read)
     └── __init__.py       # get_storage_backend(...) factory
 ```
 
@@ -511,7 +534,7 @@ engine/
 2. **Validation at construction.** `RoutingConfig`, `LatticeEdge`, and the Pydantic config models validate their inputs in `__init__` so bad values fail fast at startup, not on the 500th request.
 3. **Per-app metric registries.** `register_metrics(registry)` creates fresh metrics per app instance, avoiding `prometheus_client` global-registry collisions in tests and supporting clean multi-app deployments.
 4. **Idempotency is replay-aware, conflict-aware.** Submitting the same `(question_x_id, is_correct)` twice is a no-op (the engine returns the cached response). Submitting the same `question_x_id` with a different `is_correct` returns 409 `RESPONSE_CONFLICT`. Both behaviours are spec section 8.3.
-5. **Storage is pluggable.** The same test suite runs against `InMemoryStorage` and a `mongomock`-backed `MongoDbStorage`. Swap backends via `STORAGE_BACKEND` env var with no engine code change.
+5. **Storage is pluggable.** The same test suite runs against `InMemoryStorage` and a `mongomock`-backed `MongoStorage`. Swap backends via `STORAGE_BACKEND` env var with no engine code change.
 
 ### Verdict logic (spec section 7.6 - eight rules)
 
@@ -539,7 +562,7 @@ Lattice propagation is different. The 12 hand-curated edges are inferred relatio
 Tracked, intentional gaps. None of these block the prototype's primary purpose (verify the engine state machine + API contract are correct).
 
 1. **`CsvQuestionPool` is an interim pool.** It reads questions and calibrated parameters from `question_parameters.csv` rather than a live `questions` collection. It is production-usable today; the eventual target is a collection-backed pool behind the same interface. `StubQuestionPool` (placeholder ids) remains for unit tests only.
-2. **Offline decision-tree path (shipped for Delhi).** The per-operation sequencing trees are generated, serialized, and validated for Delhi G2-G5; see Section 11 for the modules, artifacts, and rebuild/validate commands. The session/start response carries an `offline_tree` field for the client contract; serving the serialized trees through that runtime field when the online engine is unavailable is the remaining engineering integration step, not a gap in the offline path itself.
+2. **Offline decision-tree path (shipped for Delhi; serving endpoint wired).** The per-operation sequencing trees are generated, serialized, and validated for Delhi G2-G5; see Section 11 for the modules, artifacts, and rebuild/validate commands. `session/start` returns an `offline_tree` reference and the tree is served via `GET /api/v1/diagnostic/offline-tree/{tenant_id}/{grade}` (guarded by `tree_compat_version`); a session split across online and offline folds back via `POST /session/{id}/offline-batch` and scores identically to a fully-online one. The remaining piece is the device-side offline walk itself - a TypeScript port owned by the app team, bound to the Python reference (`offline_follow.follow_capped`) by the shared vectors in `vectors/offline_walk_vectors.json` - not a gap in the engine.
 3. **Numbers operation is excluded.** Per project decision, the engine covers four operations (Addition, Subtraction, Multiplication, Division). 39 L2.5 skills are in the Delhi scope; 40 across all tenants (the 40th, "1D - 1 to 4", is served in Karnataka/Private/Telangana, not Delhi).
 4. **`find_complete_sessions_without_verdicts` is N+1 in MongoDB.** Could be a `$lookup` pipeline; left as-is because the cleanup job runs every 5 minutes and the volume should be small.
 5. **No optimistic concurrency control.** Spec section 8.6 marks v1 as single-instance per session. v2 needs an `if-match` / `expectedVersion` field on `/response` calls.
@@ -551,7 +574,7 @@ Tracked, intentional gaps. None of these block the prototype's primary purpose (
 | Suite | Count |
 |---|---|
 | Engine core (bayes, lattice, routing, verdicts, session) | 232 |
-| Storage (parameterised across InMemoryStorage and MongoDbStorage via mongomock) | 61 |
+| Storage (parameterised across InMemoryStorage and MongoStorage via mongomock) | 61 |
 | Config | 33 |
 | API + observability | 86 |
 | CLI + cli_io + cleanup | 56 |
@@ -559,7 +582,8 @@ Tracked, intentional gaps. None of these block the prototype's primary purpose (
 | Misconception-coverage layer (ledger, phases, opportunistic + backfill pick, signals, v7 verdict rule, e2e) | 77 |
 | Stage B in-process integration | 8 |
 | Offline path | 5 |
-| **Total** | **597** |
+| Mixed-mode (online/offline switching), deactivation failsafe, point-1 cleanup, and the timezone bugfix (v0.10.0) | 71 |
+| **Total** | **668** |
 
 ```bash
 pytest                      # full suite
@@ -584,7 +608,7 @@ The engine ships an offline decision-tree path: precomputed per-operation sequen
 | `offline_follow.py` | Pure base-first three-pass capped follow (`follow_capped`), engine-free and unit-tested |
 | `offline_followsim.py` | Residual-gap harness |
 | `offline_scorer.py` | History-based scorer (`score_history`, `return_session=True`) |
-| `offline_serialize.py` | Serialize to the `diagnostic_offline_trees` contract (reads `engine.__version__`, so the artifact carries 0.9.0) |
+| `offline_serialize.py` | Serialize to the `diagnostic_offline_trees` contract (reads `engine.__version__`, so the artifact carries 0.10.0) |
 | `offline_validate_artifact.py` | Deserialize-and-follow validation of the shipped artifact |
 | `measure_allowance.py`, `offline_efficiency_gap.py` | Measurement support |
 
@@ -599,7 +623,7 @@ python offline_validate_artifact.py 2,3,4,5   # validate the shipped Delhi trees
 python offline_serialize.py 2,3,4,5           # rebuild + re-serialize (Delhi)
 ```
 
-Runtime paths are repo-relative and resolve against the bundled `data/` and `artifact/` with no `/mnt` dependency. The offline follow enforces the grade budget as a hard cap via a base-first three-pass walk (Pass 1 base caps, Pass 2 misconception backfill, Pass 3 skill harvest, fixed operation order) plus a global question counter. Validation on the serialized artifact confirms cap correctness (over-budget fraction 0.000 every grade, q_max = budget), below-target ~0 every grade, reproduced residual gaps (G2 0.55, G3 2.45, G4 2.68, G5 5.33), and exact scoring / connectivity / id-join. `tests/test_offline_path.py` (5 tests, part of the 597) covers the follow / cap / phase logic and a version-drift guard.
+Runtime paths are repo-relative and resolve against the bundled `data/` and `artifact/` with no `/mnt` dependency. The offline follow enforces the grade budget as a hard cap via a base-first three-pass walk (Pass 1 base caps, Pass 2 misconception backfill, Pass 3 skill harvest, fixed operation order) plus a global question counter. Validation on the serialized artifact confirms cap correctness (over-budget fraction 0.000 every grade, q_max = budget), below-target ~0 every grade, reproduced residual gaps (G2 0.55, G3 2.45, G4 2.68, G5 5.33), and exact scoring / connectivity / id-join. `tests/test_offline_path.py` (5 tests, part of the 668) covers the follow / cap / phase logic and a version-drift guard.
 
 Per-tenant regeneration (Karnataka / Private / Telangana) waits on Telangana priors; Delhi is sized here, and because size is depth-driven the envelope is expected to hold across tenants.
 

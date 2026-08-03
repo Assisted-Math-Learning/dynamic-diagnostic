@@ -1,10 +1,293 @@
 # CHANGES.md
 
-This document summarises the changes from the initial prototype delivery (`diagnostic_engine.zip`, 368 tests) to this revised delivery (`diagnostic_engine_v2.zip`, 494 tests). Each change in the fix-pack section corresponds to a numbered item in the `prototype_fix_pack_handover.md` review document; later sections cover work done after the fix pack.
+This document summarises the changes across the diagnostic engine's development, from the initial prototype delivery (`diagnostic_engine.zip`, 368 tests) through the fix pack and question-pool work to the current delivery in this combined bundle (`diagnostic_engine/`, engine 0.10.0, 666 tests). Each change in the fix-pack section corresponds to a numbered item in the `prototype_fix_pack_handover.md` review document; the sections below (newest first) cover the work after the fix pack, including the mixed-mode (online/offline switching) and deactivation-failsafe features that took the engine to 0.10.0.
 
-Test count progression: 368 baseline → 457 (fix pack #1-#10) → 465 (cleanup metrics) → 494 (CsvQuestionPool) → 501 (per-tenant lookup) → 504 (misconception tags carried) → 506 (tag accessor). All passing. Smoke test passes for all four grades (G2, G3, G4, G5).
+Test count progression: 368 baseline -> 457 (fix pack #1-#10) -> 465 (cleanup metrics) -> 494 (CsvQuestionPool) -> 501 (per-tenant lookup) -> 504 (misconception tags carried) -> 506 (tag accessor) -> 597 (v9 misconception-integration baseline) -> 666 (mixed-mode, deactivation failsafe, and point-1 cleanup at v0.10.0). All passing. Smoke test passes for all four grades (G2, G3, G4, G5).
+
+## Bugfix: timezone-aware datetimes across the storage round-trip
+
+Fixes a 500 the app team hit on `session/response` at completion with the MongoDB
+backend: `TypeError: can't subtract offset-naive and offset-aware datetimes` in
+`_record_metrics_on_complete` (`(session.ended_at - session.started_at)`). Root
+cause: the engine writes tz-aware UTC datetimes (`datetime.now(timezone.utc)`),
+but PyMongo returns BSON dates tz-NAIVE unless the client is `tz_aware`, so a
+`started_at` reloaded from Mongo on a later request was naive while the freshly
+set `ended_at` was aware. The in-memory storage deepcopies the Session
+(preserving tzinfo), which is why the full test suite never reproduced it.
+
+- `engine/storage/mongodb.py`: build the client as
+  `MongoClient(mongo_url, tz_aware=True, tzinfo=timezone.utc)`, so reads come back
+  aware UTC and match writes.
+- `engine/storage/documents.py`: `doc_to_session` normalizes `started_at`,
+  `ended_at`, and each history entry's `asked_at` to aware UTC on read (`_as_utc`)
+  - belt-and-suspenders for a client built without the flag and for any
+  documents already persisted naive, and it also removes a latent naive/aware
+  mismatch on `asked_at` in the offline-batch ingest.
+
+No scoring, routing, verdict, calibration, or artifact change. Regression test
+`tests/test_datetime_tz_roundtrip.py` reproduces the naive read at the
+serialization boundary (independent of the driver) and asserts the reloaded
+datetimes are aware and the duration subtraction works. Test count 666 -> 668.
+
+## Deactivation Failsafe (spec sections 4-6): switched-off list, replace-question, tree-build exclusion
+
+Lets a question be made unavailable on the app - a broken asset, a pull for
+revision, a content correction - faster than the engine's own data updates,
+without ever changing how an answer is scored. The engine-side mechanisms (1-3a)
+land here; the offline device rule (3b) is the app team's, with a reference +
+binding vector shipped here. Test count 657 -> 666 (all passing); no mastery
+verdict, calibration value, routing decision, or shipped artifact changed.
+
+- **Switched-off list (mechanism 1, sections 4/7).** New optional
+  `switched_off_question_x_ids` + `switched_off_mode` (`replace` default /
+  `append`) on the three selecting calls (session start, submit-answer,
+  offline-batch). The set is per-session state (`Session.switched_off_question_x_ids`),
+  updated only when supplied, and preserved across the offline-batch full replay.
+  It feeds the SAME candidate filter as the retired list, keyed on the tenant's
+  resolved variant (`_excluded_xids` in `CsvQuestionPool`, applied in both
+  `pick_question_for_skill` and `backfill_pick`): a switched-off variant is never
+  chosen, and an item whose only tenant variant is switched off is treated as
+  unavailable exactly as a retired item is. `replace` also switches a question
+  back on (supply the corrected set; an empty list clears everything).
+- **"Give me another question" (mechanism 2, section 5).** New endpoint
+  `POST /api/v1/diagnostic/session/{id}/replace-question` (submit-answer auth).
+  The declined `question_x_id` joins a SEPARATE transient per-session set
+  (`declined_question_x_ids`), selection is re-run this turn (excluding declined
+  + switched-off + retired + answered), and the next-question payload is returned.
+  No answer is recorded, no budget is consumed, the declined question is not
+  re-offered, and the transient set is never persisted or merged into the
+  switched-off list. If nothing usable remains, it falls to the normal
+  session-complete/advance path (`select_next_coverage` returns None).
+- **Tree-build exclusion (mechanism 3a, section 6a).** `PerOpBuilder` accepts an
+  optional `switched_off` build input (threaded via its synthetic session, so the
+  same filter excludes those variants throughout the walk); `offline_serialize`
+  passes it (empty by default - the bundle has no live pool - so the shipped
+  artifacts are unchanged). Per decision 8, `tree_compat_version` is NOT bumped
+  for a switched-off change: old trees stay valid and the device skip rule handles
+  any switched-off question still in them.
+- **Offline skip reference + vector (mechanism 3b, section 6b).** `follow_capped`
+  gains an optional `unavailable` set: a node whose question the device cannot
+  present is skipped (nothing recorded, no budget), following the on-incorrect
+  branch (under-placement, never over-placement). The shared vectors gain a
+  section-6b `unavailable_skip` case per grade (the skipped id never appears);
+  the production rule ships with the TypeScript port, bound to this reference.
+- **All-off start signal (post-review).** If a caller switches off every available
+  question at session start, the first pick now raises a specific, catchable
+  `NO_USABLE_QUESTION` (HTTP 422) instead of a generic 500 - a client-input
+  condition (the switched-off list covers everything), not a server fault. It is
+  deliberately NOT degraded to a silent all-uncertain "complete": an empty usable
+  set means the diagnostic could not run, which is an error, not a completion.
+  With no switched-off list a genuine pool/data gap keeps its original error.
+- **Tests (section 9):** switched-off never offered / item fully off,
+  verdict-neutrality on the recorded answers, replace/append/clear, persistence
+  without re-passing, give-me-another (records nothing / no budget / not
+  re-offered / not merged), give-me-another with no alternative -> complete,
+  ingest accepts a switched-off answer (still calibrated, still scored), tree-build
+  exclusion with `tree_compat_version` unchanged, and the offline unavailable-skip
+  vector cases.
+
+## Mixed-mode (online/offline switching) - Phase A: version + artifacts + serving guard
+
+Implements the gating part of the mixed-mode work spec (v11): the version bump,
+the artifact metadata additions, and the serving-guard change. The engine-side
+mixed-mode logic (offline-batch ingest, resumption token, `score_history`
+promotion, the entry-point walk extension, and the TC-MIX / equivalence tests)
+lands in subsequent phases. Test count 623 -> 624 (all passing); no mastery
+verdict, calibration value, or routing decision changed.
+
+- **Version bumped to 0.10.0** across `engine/__init__.py`, `pyproject.toml`,
+  `config/engine_config.yaml` (mixed-mode is a backward-compatible feature
+  addition; MINOR bump per semver and v11 decision 5). B1/B2 remain historically
+  0.9.0.
+- **Offline artifacts regenerated with two additive metadata fields, routing
+  unchanged.** Each `artifact/Delhi/g{2,3,4,5}.json.gz` now carries (1) an
+  `items` array parallel to `questions` in every per-operation tree, so the
+  device can match in item space for offline entry-point/no-repeat (v11 sections
+  6, 11 - the device cannot derive `item` from the calibration block, which
+  holds skill only); and (2) a top-level `tree_compat_version` (integer, initial
+  value 1). The node/question/root tables are byte-identical to the previous
+  artifacts - verified per grade - so no routing or verdict changes. The
+  serializer (`offline_serialize.py`) emits both fields going forward.
+- **Serving guard switched from `engine_version` to `tree_compat_version`**
+  (v11 decision 8). `engine/offline_registry.py` now serves a tree only when its
+  `tree_compat_version` matches the engine's required version
+  (`REQUIRED_TREE_COMPAT_VERSION = 1`), instead of requiring an exact
+  `engine_version` match. Without this, going to 0.10.0 would make every
+  0.9.0-stamped tree look stale and offline serving would return null. A plain
+  future engine bump no longer strands the trees; `tree_compat_version` is
+  bumped only on a tree-format or scoring/selection change.
+- **`OfflineTreeRef` gains `tree_compat_version`** (the value the device echoes
+  back in the offline-batch); `engine_version` is retained for information only
+  and no longer gates serving. The B1 `size_bytes`/`sha256` reference is
+  recomputed live from the regenerated artifacts, so it stays exact.
+
+## Mixed-mode (online/offline switching) - Phase B: state unification
+
+Unifies no-repeat, budget, and three-pass accounting over the whole
+`question_history` so that offline (`offline_replay`) answers are counted
+identically to online ones - the invariant that lets Phase C's ingested offline
+answers be seen by selection without special-casing. Test count 624 -> 627 (all
+passing); no behaviour change for pure-online sessions.
+
+- **Audit result: no per-segment view existed to refactor.** The online engine
+  already read the whole `question_history` with no `routing_mode` filter
+  anywhere: no-repeat maps every history entry to its item, budget is
+  `len(question_history)`, and `questions_per_operation` (which the three-pass
+  phase logic reads) is incremented by `record_response` for every answer
+  regardless of mode. So the "unify state" work is a lock-in, not a rewrite.
+- **Single-sourced the no-repeat contract.** The duplicated inline no-repeat
+  block in `CsvQuestionPool.pick_question_for_skill` and `.backfill_pick` is
+  replaced by one helper, `_answered_items(session)`, which reads the ENTIRE
+  history in item space (mapping `question_x_id -> item`, dropping unknown ids)
+  and is documented not to filter by routing_mode/segment. Behaviour is
+  identical; the duplication that could have drifted (and silently excluded
+  offline answers) is gone.
+- **Regression guards added** (`tests/test_mixed_mode_state_unification.py`): an
+  `offline_replay` answer increments `questions_total`, `routing_mode_counts`,
+  and `questions_per_operation` exactly like an online one (and per-op counts
+  sum to the budget); no-repeat excludes an item answered via `offline_replay`;
+  `_answered_items` is segment-agnostic and None-safe for an id absent from the
+  pool.
+
+## Mixed-mode (online/offline switching) - Phase C: score_history promotion + offline-batch ingest
+
+Adds the server ingest that folds a completed offline segment back into a
+session and recomputes verdicts. Test count 627 -> 633 (all passing); no
+mastery verdict, calibration value, or routing decision changed for any
+pure-online session.
+
+- **`score_history` promoted into `engine/`** (`engine/history_scorer.py`),
+  relocation only - no scoring-logic change. The top-level `offline_scorer.py`
+  now re-imports it (its online-capture validation harness stays there). This
+  lets the route call the scorer and brings it under the automated suite. It
+  imports only `engine.session` + `engine.misconception`, so there is no circular
+  import with the API layer.
+- **New endpoint `POST /api/v1/diagnostic/session/{sub_session_id}/offline-batch`**
+  (`X-Internal-Service-Token`, tenant + learner checked like the other write
+  endpoints). Request: batch-level `resume_anchor`, `tree_id`, `tree_version`,
+  `tree_compat_version`, and an ordered `answers` list of
+  `{question_x_id, skill_id, is_correct, raw_response, asked_at}` - `raw_response`
+  is included so offline answers feed Stage B. The server derives `item` and
+  calibration from the pool. Returns the next online question, or session-end
+  plus verdicts, in the same shape as `session/response`.
+- **Ingest logic** (`engine/offline_ingest.py`, `apply_offline_batch`): full-history
+  idempotency on `question_x_id` (duplicate = no-op; conflicting `is_correct` =
+  `RESPONSE_CONFLICT`); resume-anchor placement (insert the block after the
+  anchored answer by stable id, ordered within the block by `asked_at`, then
+  renumber) with an anchor-not-found tail-append + flag; keep-earliest item
+  de-dup + flag; a full-history replay through `score_history` to rebuild
+  posteriors, the misconception ledger, direct-observation counts, and the
+  reserve baseline; per-operation and routing-mode counts recomputed from the
+  full unified history (so a skipped entry still counts for budget/no-repeat);
+  skip-and-flag any entry whose `question_x_id` has no calibration; accept-and-flag
+  over-budget batches, with a hard reject only above twice the grade budget
+  (`OFFLINE_BATCH_TOO_LARGE`, 400). Every appended entry is `offline_replay`;
+  `tree_id_used`/`tree_version_used` are set; `offline_sync_events_total` is
+  incremented (previously dead); de-dup, anchor-not-found, skipped-calibration,
+  over-budget, and stale-tree events are logged.
+- **Verified:** an ingested mixed session's mastery verdicts equal a fresh full
+  replay of the same unified `question_x_id` sequence (the neutrality property),
+  plus idempotency, conflict, item no-repeat, and the over-size guard, all under
+  the automated suite.
+
+## Mixed-mode (online/offline switching) - Phase D: resumption token
+
+Adds the server-pushed resumption snapshot the device caches to seed the offline
+walk (v11 section 8, decision 1, design (a)). Test count 633 -> 637 (all
+passing); additive response field only, no behaviour or scoring change.
+
+- **`resumption_token` on `SessionStartResult` and `SessionResponseResult`**
+  (and therefore on the offline-batch response, which reuses the response model,
+  so the token is refreshed after every ingest too - v11 section 10). At session
+  start the history is empty, so the token is `resume_anchor=null`,
+  `budget_used=0`, `answers=[]`; it is `null` once the session is complete (no
+  offline continuation).
+- **Token contents** (`ResumptionToken` / `ResumptionEntry`): per answered entry,
+  `question_x_id`, `is_correct`, `item`, `skill_id`, `operation`, and `asked_at`;
+  plus `resume_anchor` (the `question_x_id` of the last answer, echoed back in the
+  offline-batch to place it chronologically) and `budget_used` (the unified
+  budget spent). `item` and `operation` are supplied because the device cannot
+  derive them from the shipped artifact (skill + calibration only); the
+  posteriors block for the deferred confident-skill enhancement (decision 4) is
+  intentionally omitted in v1.
+- Built by `_build_resumption_token` in the API layer; robust to a pool without
+  the item map (`item=null` in that case), so pure-online/stub paths are
+  unaffected.
+
+## Mixed-mode (online/offline switching) - Phase E: walk extension + equivalence and invariant tests
+
+Completes mixed-mode: the offline-walk entry-point extension and the full
+section-16 test matrix, plus the enforced decision-9 guard. Test count 637 ->
+649 (all passing). No scoring/behaviour change for pure-online sessions.
+
+- **Offline-walk entry-point (v11 sections 6-7).** `follow_capped` (the pure
+  walk reference) gains an optional resume mode: given `answered`
+  (item -> is_correct of the unified history, item space) and `items`
+  (op -> list parallel to `questions`), it routes past every already-answered
+  item on the tree path - online or offline, any variant - and asks only from
+  the first unanswered node, spending the remaining unified budget and never
+  re-emitting an answered item. Backward-compatible (omitting the args is the
+  fresh walk). `offline_followsim.base_first_follow` threads it through, with
+  `items_for(trees, pool)` building the item map; this is the Python reference
+  the app team's TypeScript port is bound to by shared vectors (decision 10).
+- **Equivalence + invariants** (`tests/test_mixed_mode_equivalence.py`): a mixed
+  session (online prefix + an offline segment folded in via the ingest) scores
+  identically to the pure-online scoring of the same answers, across random
+  split points; a late/out-of-order batch is placed correctly by its resume
+  anchor (reconstructing true chronology) and scores identically; the
+  anchor-not-found case tail-appends, flags, and still scores correctly; and
+  across walk-generated mixed sessions the grade budget is never exceeded and no
+  item is repeated. Plus a unit test that the resumed walk routes past answered
+  items.
+- **Decision-9 guard enforced** (`engine/retirement_guard.py` +
+  `tests/test_retirement_guard.py`): `check_retirement_calibration` verifies that
+  every item-scope retirement either keeps a calibration row or is on the
+  documented `DECALIBRATED_ALLOWLIST` (the 10 pre-artifact decalibrated items),
+  and that no allow-listed item is referenced by any shipped tree. The guard
+  holds on the shipped bank + artifacts, and the allow-list matches the actual
+  decalibrated set exactly - so the invariant is now checked, not assumed.
+
+## Mixed-mode - Phase E follow-up: QC-review closures
+
+Closes the coverage/strengthener items from the independent QC review of the v10
+bundle (all were coverage/documentation, not defects - the review approved the
+build). Test count 649 -> 654 (all passing).
+
+- **Multiple offline segments (TC-MIX-06/07), now in CI.** `test_multiple_offline_segments_equal_pure_online`: online -> batch1 -> online -> batch2 scores identically to pure-online on the same answers, with both batches present. This is the field case; the mechanism was already correct, this automates it.
+- **Stale tree at ingest (TC-MIX-15).** `test_offline_batch_stale_tree_accepted_and_flagged`: a batch posted with a mismatched `tree_compat_version` is still accepted (answers persisted as `offline_replay`) and the mismatch is flagged (asserted via captured structlog).
+- **Grade-5 equivalence (TC-MIX-16).** `test_mixed_split_equals_pure_online_grade5`: equivalence also holds at grade 5 (Division-first operation order, different budget).
+- **Shared offline-walk vectors (decision 10).** `generate_offline_vectors.py` emits `vectors/offline_walk_vectors.json` from the SHIPPED artifacts (the exact trees the device downloads), so the app team's TypeScript walk can be bound to this reference and cannot drift. To pin the port across MANY tree paths rather than one branch per grade, each grade carries several answer patterns - all-correct (every on_correct branch), all-wrong (every on_incorrect branch), and two seeded mixes - each with a fresh and a resumed case: **32 vectors** total (answers embedded, uniform patterns via a `default_answer`, no RNG to replicate). `tests/test_offline_vectors.py` re-runs `follow_capped` against every pattern/case and asserts it reproduces the golden sequence/count.
+- **Catalogue tags.** Every mixed-mode test carries its `TC-MIX-NN` (v11 section 23) tag - the newer tests in their docstrings, the earlier ones as a one-line tag comment - giving a 1:1 audit trail against the catalogue with no logic change.
+- **Large-sample mixed sweep.** `offline_followsim.py mixed <grade> <n>` runs the several-hundred-session equivalence sweep (online prefix + real ingest vs pure-online) alongside the CI tests; a 200-session grade-3 run reports 0 verdict mismatches and 0 over-budget.
+- **Within-batch duplicate case named** (`offline_ingest.py` comment): idempotency/conflict is checked against the existing history only; two identical `question_x_id`s inside one batch with conflicting `is_correct` are keep-earliest de-duped rather than raising `RESPONSE_CONFLICT` (a correct device never emits this).
+
+## Mixed-mode - Point 1 cleanup: catalogue completion + sweep automation
+
+Closes the three optional engine-side items from the v2/v3 reviews (Engine Bundle
+Cleanup Spec, Point 1). Coverage/automation only - locks guarantees already
+provided by the code; no behaviour or invariant change. Test count 654 -> 657.
+
+- **TC-MIX-14 - no phantom answer** (`test_offline_batch_omitted_question_not_recorded`):
+  a question shown but not answered is simply absent from the batch, so it is
+  never recorded (no blank/fabricated entry), does not count toward budget or
+  no-repeat, and can still be answered normally in a later batch - the earlier
+  non-answer does not poison it.
+- **TC-MIX-17 - budget exhausted before offline** (`test_walk_asks_nothing_when_budget_exhausted`):
+  the offline walk resumed with a remaining budget of zero asks nothing and
+  terminates cleanly (the hard cap stops it before any question).
+- **Automated mixed sweep** (`test_mixed_sweep_ci_grades_3_and_5`): a CI-sized
+  run of `run_mixed_sweep` - 50 sessions at grade 3 and 40 at grade 5 - asserts
+  zero verdict mismatches versus pure-online and zero over-budget, so a future
+  change that breaks mixed-mode equivalence fails the standing suite. The full
+  several-hundred-session run stays opt-in via `offline_followsim.py mixed`;
+  `run_mixed_sweep` now returns `{sessions, mismatches, over_budget}`.
+
+With TC-MIX-14 and TC-MIX-17 added, the section-23 catalogue is complete except
+TC-MIX-12 (confident-skill skipping, deferred by decision 4).
 
 ## Offline-tree runtime wiring (B1) and raw-response persistence (B2)
+
+
 
 Test count: 597 -> 623 (all passing; +26 new). **Engine version stays 0.9.0** by
 decision: both features complete already-scoped v9 work (the offline path and the
@@ -90,9 +373,9 @@ confirmation - only the engine contract (accept, store, expose) is built here.
 
 ## Critical fix: priors data source (post-#10)
 
-**Problem:** The smoke test with the all-correct policy returned 7/21/30/39 confident-only verdicts for G2/G3/G4/G5 — the engine was declaring every skill mastered without asking real questions, because the input priors were uniformly above 0.95 and Rule 2 (priors-only resolution) fired on almost every skill.
+**Problem:** The smoke test with the all-correct policy returned 7/21/30/39 confident-only verdicts for G2/G3/G4/G5 - the engine was declaring every skill mastered without asking real questions, because the input priors were uniformly above 0.95 and Rule 2 (priors-only resolution) fired on almost every skill.
 
-**Root cause (data, not code):** `priors_table.csv` was computed from MainD response data — a selection-biased subset of learners who had already progressed past each skill — rather than from the raw Delhi diagnostic response population. G3 mean p_mastered in that file was 0.965; sample sizes varied wildly (n=3 for hard skills, n=1000+ for foundational ones); and there was no G2 data at all.
+**Root cause (data, not code):** `priors_table.csv` was computed from MainD response data - a selection-biased subset of learners who had already progressed past each skill - rather than from the raw Delhi diagnostic response population. G3 mean p_mastered in that file was 0.965; sample sizes varied wildly (n=3 for hard skills, n=1000+ for foundational ones); and there was no G2 data at all.
 
 **Fix:** Repointed the priors loader at `priors_table_delhi_only.csv`, derived from the raw Delhi diagnostic response population (n_DL ≥ 130 per skill). The new file has:
 - 48 rows across G2-G5 (G2: 6 skills, G3: 10, G4: 14, G5: 18)
@@ -109,19 +392,19 @@ confirmation - only the engine contract (accept, store, expose) is built here.
 
 ---
 
-## Change 1 — MongoDB env var bridge (CRITICAL)
+## Change 1 - MongoDB env var bridge (CRITICAL)
 
 **Problem:** `get_storage_backend()` accepted `mongo_url` and `database_name` as kwargs but did not read the `MONGODB_URL` / `MONGODB_DATABASE` environment variables. Starting the engine in MongoDB mode without explicit kwargs produced a confusing `TypeError`.
 
 **Fix:** `engine/storage/__init__.py:get_storage_backend` now uses `setdefault` to bridge `MONGODB_URL` → `mongo_url` and `MONGODB_DATABASE` → `database_name` when the kwargs are absent. Raises a clean `ValueError("STORAGE_BACKEND=mongodb requires the MONGODB_URL env var ...")` when neither the kwarg nor the env var is set. Explicit kwargs win over env vars. 4 new tests in `TestStorageFactory`. README env-var table corrected (`MONGODB_DATABASE` default is now `aml_engine`).
 
-## Change 2 — Missing-priors WARN, /health field, and STRICT_PRIORS_REQUIRED
+## Change 2 - Missing-priors WARN, /health field, and STRICT_PRIORS_REQUIRED
 
 **Problem:** A configured grade with no priors silently falls back to a default 0.5 prior for every skill. Safe for testing, but a hidden behaviour change in production. The canonical `priors_table.csv` has no G2 priors, so this silent fallback is live today for any G2 deployment.
 
 **Fix:** New pure function `engine.config.check_priors_coverage(config) -> List[int]` returns the sorted list of configured grades with empty priors. `create_app` always calls it, stores the list on `app.state.priors_missing_for_grades`, and logs one WARN per missing grade. `/health` exposes the field. `create_app_from_env` reads the new `STRICT_PRIORS_REQUIRED` env var (default `false`); when `true` and the list is non-empty, startup raises `RuntimeError` before app construction. Verified against real `priors_table.csv` (G2 surfaces correctly). 11 new tests.
 
-## Change 3 — QuestionPool interface, per-item calibration, and NO_QUESTION_FOR_SKILL
+## Change 3 - QuestionPool interface, per-item calibration, and NO_QUESTION_FOR_SKILL
 
 **Problem:** The pool interface (`pick_question_id(skill, session) -> str`) was thin and didn't accommodate spec section 6.2.1's optional per-item calibrated `slip_i` / `guess_i`. The spec section 7.8 failure mode (`NO_QUESTION_FOR_SKILL` when the candidate pool is empty) had no error code.
 
@@ -131,13 +414,13 @@ Threading: the route handler picks the next question, gets back a `QuestionPick`
 
 15 new tests across session-level Bayes math (hand-computed `0.857` default → `0.951` with both overrides), end-to-end API plumbing, and storage round-trip. Stub pool documented as always returning None overrides; real implementations must raise `NoQuestionForSkillError` on empty pools.
 
-## Change 4 — request_id middleware
+## Change 4 - request_id middleware
 
 **Problem:** `structlog` was configured with `merge_contextvars` and `request_id` in the PII allow-list, but no middleware ever bound `request_id` to contextvars. Logs were missing the field; clients couldn't correlate request lifecycles.
 
 **Fix:** New `engine/api/middleware.py:RequestIdMiddleware` (Starlette `BaseHTTPMiddleware`). Reads `X-Request-Id` from the request or generates a UUID4. Binds to structlog contextvars via `bind_contextvars`; unbinds in `finally` so cleanup runs on exception paths. Echoes the id back on the response. 5 new tests including a route-handler inspection that confirms the contextvar is set during request handling. Verified end-to-end on the real app (both passthrough and UUID-generation paths).
 
-## Change 5 — Cleanup CLI subcommand and CronJob documentation
+## Change 5 - Cleanup CLI subcommand and CronJob documentation
 
 **Problem:** The storage layer had `find_complete_sessions_without_verdicts` and the metrics layer had `cleanup_job_*` counters, but no actual cleanup function existed. Partial-write recovery (session marked complete, verdict insert crashed) was specified but unimplemented.
 
@@ -147,7 +430,7 @@ README §7 gains a "Cleanup CronJob" subsection with Kubernetes YAML (`*/5 * * *
 
 **Latent bug fixed:** `cmd_seed_lattice` had been calling `get_storage_backend(args.storage)` positionally since change #1 made `backend` keyword-only. Existing tests passed because they don't exercise `--storage`. Both `cmd_seed_lattice` and `cmd_cleanup` now use `get_storage_backend(backend=args.storage)` correctly.
 
-## Change 6 — Verdict refinement (spec section 7.6 eight-rule table)
+## Change 6 - Verdict refinement (spec section 7.6 eight-rule table)
 
 **Problem:** Old verdict logic downgraded EVERY skill with `direct_observations == 0` to `uncertain`, regardless of whether the skill was untouched (priors-only) or moved by lattice propagation (propagation-only). Spec section 7.6 separates these: priors-only skills earn `confident_mastered` / `confident_not_mastered` (Rules 2 and 7); propagation-only skills are still downgraded (Rules 3 and 8). The testing-summary evidence backing this is in Testing Summary §§4 and 9: priors are calibrated well enough to trust without verification, but lattice propagation is not.
 
@@ -155,37 +438,37 @@ README §7 gains a "Cleanup CronJob" subsection with Kubernetes YAML (`*/5 * * *
 
 **Headline behavioural shift** in the G3 smoke (all-correct policy): pre-change `7 mastered + 14 uncertain` → post-change `21 confident_mastered`. All 14 previously-downgraded skills are priors-only with priors already ≥ 0.95 (the no-overshoot rule in `_push_up` prevents propagation from moving them, so they stay priors-only). G2 retains a mixed distribution (`7 + 5`) because G2 priors are the default-0.5 fallback. README §8 verdict table rewritten with all 8 rules + the mechanism explanation citing Testing Summary §§4 and 9. 37 new and rewritten tests.
 
-## Change 7 — Grade schema tightened to 2-8
+## Change 7 - Grade schema tightened to 2-8
 
 **Problem:** `SessionStartRequest.grade` accepted `1-12`, beyond spec section 2's supported range of 2-8 (2-5 explicitly configured, 6-8 fall back to G5).
 
 **Fix:** `ge=1, le=12` → `ge=2, le=8`. The existing Pydantic-to-`INVALID_GRADE` exception handler keeps the API envelope (400 + `INVALID_GRADE`) identical regardless of whether rejection happens at Pydantic or engine layer. No client-visible behaviour change beyond the error message text. Single `grade=99` test replaced with 12 parametrized cases covering both boundaries.
 
-## Change 8 — Duplicate /health route removed
+## Change 8 - Duplicate /health route removed
 
 **Problem:** `/health` was registered on both the prefixed router (`/api/v1/diagnostic/health`) and the flat router (bare `/health`). The flat one delegated to the prefixed one.
 
 **Fix:** Prefixed registration removed. Implementation moved directly onto the flat router. The bare `/health` is now the single source for Kubernetes probes and operational tooling. README already referenced bare `/health` only; one test inverted (`test_health_on_prefixed_path_also_works` → `test_health_not_exposed_on_prefixed_path`, asserts 404).
 
-## Change 9 — README §8 verdict table
+## Change 9 - README §8 verdict table
 
 Done as part of change #6. The README's verdict section was rewritten with the full 8-rule table and a mechanism explanation citing Testing Summary §§4 and 9.
 
-## Change 10 (optional) — last_updated_at walks question_history
+## Change 10 (optional) - last_updated_at walks question_history
 
 **Problem:** `session_to_doc` used `session.started_at` as the `last_updated_at` for every skill, regardless of when the skill was actually asked.
 
 **Fix:** Single pass over `session.question_history` builds a `{skill_id: most_recent_asked_at}` lookup. `posteriors_nested` uses it, falling back to `session.started_at` for skills never directly asked (their posterior is either still at the cohort prior or was moved by lattice propagation; propagation events do not have timestamps in the session state, documented as a known limitation in the code comment). 6 new tests (3 cases × 2 storage backends).
 
-## Change 11 (optional) — $lookup aggregation — SKIPPED
+## Change 11 (optional) - $lookup aggregation - SKIPPED
 
 The fix pack flagged this as "skip if mongomock breaks". The N+1 query pattern in `find_complete_sessions_without_verdicts` is acceptable because the cleanup CronJob runs every 5 minutes against a typically-small backlog. The optimisation can land in a follow-on change if production traffic indicates it matters. Tracked as a known limitation in README §9.
 
-## Change 12 — Spec section 16 surfaced in README
+## Change 12 - Spec section 16 surfaced in README
 
 **Problem:** Spec section 16 enumerates 19 pending engineering decisions where the spec has assumed defaults. These need triage before the pilot promotes to GA but were not visible in the prototype README.
 
-**Fix:** New "Pending engineering decisions (spec section 16)" subsection in README §6, grouped by category (Operational / Performance / Naming / Question pool & content team) for actionability. Spec item numbers preserved as the table's first column for traceability. Items 16-19 (content team coordination) are flagged as interacting with the per-item-overrides plumbing now in place from change #3 — the engine is ready to consume calibrated `slip_i` / `guess_i` the moment the content team or calibration pipeline starts populating them.
+**Fix:** New "Pending engineering decisions (spec section 16)" subsection in README §6, grouped by category (Operational / Performance / Naming / Question pool & content team) for actionability. Spec item numbers preserved as the table's first column for traceability. Items 16-19 (content team coordination) are flagged as interacting with the per-item-overrides plumbing now in place from change #3 - the engine is ready to consume calibrated `slip_i` / `guess_i` the moment the content team or calibration pipeline starts populating them.
 
 Existing §6 deployment checklist refreshed: items #5 (request_id middleware) and #6 (cleanup job scheduler) removed (changes #4 and #5 resolved them). New item #7 added: set `STRICT_PRIORS_REQUIRED=true` in production. §9 Known limitations list pruned (`last_updated_at` placeholder and cleanup-scheduler entries removed).
 
@@ -222,29 +505,29 @@ The mix reflects three distinct paths through the spec section 7.6 rules: skills
 
 Existing readers of these documents that follow only the original spec will simply not see the new fields; reads via `doc_to_session` / `doc_to_verdict` are backwards compatible (missing fields map to defaults).
 
-## Misconception-coverage layer — Checkpoint 1: session ledger + applicability
+## Misconception-coverage layer - Checkpoint 1: session ledger + applicability
 
-First of four checkpoints implementing the misconception-coverage selection spec. This checkpoint adds the state and the applicability computation only; the ledger is populated but not yet acted on (no opportunistic pick, no backfill), so selection behaviour is unchanged — the prior test floor and the seeded tenant-aware smoke distribution are byte-identical.
+First of four checkpoints implementing the misconception-coverage selection spec. This checkpoint adds the state and the applicability computation only; the ledger is populated but not yet acted on (no opportunistic pick, no backfill), so selection behaviour is unchanged - the prior test floor and the seeded tenant-aware smoke distribution are byte-identical.
 
 - **`engine/misconception.py` (new):** the canonical 11-name `MISCONCEPTIONS` tuple, single source of truth for the ledger, the pool, and storage.
 - **`Session` ledger (`engine/session.py`):** `misconception_asked` / `misconception_correct` (per-tag counts, initialised to zero for all 11 at session start) and `misconception_applicable` (the set the pool can serve, fixed at session start). A `pending_question_misconceptions` field carries the chosen question's tags alongside the existing pending slip/guess stash. `record_response` updates the counters at answer-time (asked for every tag the answered question carries; correct only when right), reached only on a real non-replay update so each question counts once. Legacy mode (no tags) leaves the ledger untouched.
-- **`CsvQuestionPool.applicable_misconceptions(tenant_id, grade, skills_in_scope)`:** returns the misconceptions the pool can actually serve, using the *identical* eligibility as `pick_question_for_skill` (in-scope skill, tenant-available, not retired, grade-resolvable by grade-row-else-`all`), so applicability equals coverability. Empty in legacy mode. Verified against real data: G2=7, G3=8, G4=11, G5=11, with G2 tenant-invariant — matching the coverage audit.
+- **`CsvQuestionPool.applicable_misconceptions(tenant_id, grade, skills_in_scope)`:** returns the misconceptions the pool can actually serve, using the *identical* eligibility as `pick_question_for_skill` (in-scope skill, tenant-available, not retired, grade-resolvable by grade-row-else-`all`), so applicability equals coverability. Empty in legacy mode. Verified against real data: G2=7, G3=8, G4=11, G5=11, with G2 tenant-invariant - matching the coverage audit.
 - **Storage round-trip (`engine/storage/documents.py`):** the ledger and pending tags serialise/deserialise so they survive the per-request session reload; pre-feature documents deserialise to an empty (inert) ledger.
 - **Route glue (`engine/api/routes.py`):** `session_start` computes the applicable set from the pool; `_pick_question_and_stash` stashes the picked question's tags.
 
 Test count: 506 → 520 (14 new in `tests/test_misconception_ledger.py`): the canonical list, synthetic applicability (scope/tenant/grade/legacy), answer-time counting (asked/correct/wrong-answer/no-tags/replay), storage round-trip and backward compatibility, plus two real-data checks (the 7/8/11/11 audit match and an end-to-end Delhi G3 session populating the persisted ledger). Full suite green; tenant-aware smoke unchanged across G2-G5.
 
-## Misconception-coverage layer — Checkpoint 2: opportunistic pick
+## Misconception-coverage layer - Checkpoint 2: opportunistic pick
 
 Adds the opportunistic preference inside `CsvQuestionPool.pick_question_for_skill` (spec section 5.1): among the discrimination-window survivors, prefer the candidate that advances the most still-unmet applicable misconceptions (greedy multi-tag), narrow to the sharpest among those, then let the existing mode make the final choice (random spreads exposure in production; deterministic is lexicographic for the offline tree).
 
-Engagement is gated on `max_advance > 0` — the logic fires only when an in-window candidate actually advances an unmet applicable misconception. When nothing can be advanced (no applicable misconceptions, all at target, or no in-window carrier), `candidates` stays the full window and the pick is byte-identical to before. `misconception_target` is a new pool constructor parameter (default 2); `<= 0` disables the preference.
+Engagement is gated on `max_advance > 0` - the logic fires only when an in-window candidate actually advances an unmet applicable misconception. When nothing can be advanced (no applicable misconceptions, all at target, or no in-window carrier), `candidates` stays the full window and the pick is byte-identical to before. `misconception_target` is a new pool constructor parameter (default 2); `<= 0` disables the preference.
 
 Behaviour note: from this checkpoint selection genuinely changes when applicable misconceptions exist, so the seeded tenant-aware smoke distribution (and question count) differs from checkpoint 1 by design; it still completes for G2-G5. The pick never leaves the discrimination window, so mastery-measurement quality is unchanged. Measured opportunistic gain on a seeded Delhi G3 session: applicable misconceptions reaching the floor for free rose from 3/8 to 6/8.
 
 Test count: 520 -> 528 (8 new in `tests/test_opportunistic_pick.py`): tagged-preferred in both modes, inert when met / when no applicable (exposure preserved), out-of-window carrier never chosen, greedy multi-tag, production exposure spread vs deterministic collapse (test case 12), and deterministic reproducibility. Full suite green.
 
-## Misconception-coverage layer — Checkpoint 3a: backfill selection primitive
+## Misconception-coverage layer - Checkpoint 3a: backfill selection primitive
 
 Adds `CsvQuestionPool.backfill_pick(tenant_id, grade, skills_in_scope, session, needed)`: a skill-agnostic primitive that returns the not-yet-asked, eligible question across the in-scope skills advancing the most of the supplied `needed` misconception set (greedy multi-tag), tiebroken by sharpest then the mode-appropriate final pick, or None when nothing eligible carries a needed tag (shortfall). Pure selection only; the pass-A/pass-B orchestration and reserve accounting come in checkpoint 3b and call this same primitive.
 
@@ -254,7 +537,7 @@ Refactor: extracted three shared helpers (`_final_pick`, `_narrow_to_sharpest`, 
 
 Test count: 528 -> 536 (8 new in `tests/test_backfill_pick.py`): greedy multi-tag, skill-agnostic selection, session-wide no-repeat, None-on-shortfall, floor-ignored-for-coverage, sharpest tiebreak, exposure spread vs deterministic collapse, and tag/override carrying. Full suite green.
 
-## Misconception-coverage layer — Checkpoint 3b-i: budget plumbing + Phase-3 helper
+## Misconception-coverage layer - Checkpoint 3b-i: budget plumbing + Phase-3 helper
 
 Plumbing for the phase controller (the controller and route wiring follow in 3b-ii/3b-iii):
 - `GradeBudget.reserve_size` (default 0) and `EngineParams.reserve_size` / `.adaptive_budget` (= total - reserve). Reserve 0 keeps the layer inert (Phase 1 = full budget), so existing configs are unchanged.
@@ -264,7 +547,7 @@ Plumbing for the phase controller (the controller and route wiring follow in 3b-
 
 Test count: 536 -> 542 (6 new in `tests/test_coverage_phases.py`): adaptive_budget plumbing and the leftover selector (picks an unsure skill, None when all resolved, ignores per-op caps, restricts to the candidate set). Full suite green.
 
-## Misconception-coverage layer — Checkpoint 3b-ii: phase controller
+## Misconception-coverage layer - Checkpoint 3b-ii: phase controller
 
 Adds `engine/coverage.py: select_next_coverage(session, params, pool)` - the orchestration sequencing Phase 1 (adaptive under the lowered total stop), Phase 2 (backfill pass A floor + pass B conditional extra), and Phase 3 (leftover-to-mastery, info-gain among unsure skills with caps lifted). Returns a uniform `(skill, QuestionPick)` across phases, or None when complete. Pure function of session state except it sets `Session.reserve_phase_started_at` once when Phase 1 ends (the reserve baseline / forfeit marker, persisted via storage).
 
@@ -274,7 +557,7 @@ NOT yet wired into the request path - that is checkpoint 3b-iii (the route integ
 
 Test count: 542 -> 550 (8 new controller tests in `tests/test_coverage_phases.py`): Phase 1 pick, Phase-1-end marker, reserve-0 inert, pass A to floor, pass B tie-only, reserve exhaustion, Phase 3 leftover, all-resolved completion. Full suite green.
 
-## Misconception-coverage layer — Checkpoint 3b-iii: route wiring
+## Misconception-coverage layer - Checkpoint 3b-iii: route wiring
 
 Wires the phase controller into the live request path. `record_response` gains an opt-in `defer_next` (mutate-only; no next/finalize) used by the route; `finalize_session` is extracted as a shared finalizer; `Session.pending_question_skill_id` is added (persisted) so replay can re-serve the pending question and so skill-agnostic backfill picks carry their skill. The route now: applies the answer (defer_next=True), then on replay re-serves the stashed pending question (idempotent, controller not re-run), else runs `select_next_coverage` -> stashes the resolved `(skill, pick)` directly (via the new `_stash_resolved`, not a re-pick) or finalizes when the controller returns None.
 
@@ -282,7 +565,7 @@ reserve_size=0 (default) keeps the whole path byte-identical to the pre-coverage
 
 Tests: 550 -> 553. New `tests/test_coverage_e2e.py` (3 tests, skipped without /mnt/project + the tenant lookup) drives full HTTP sessions on real Delhi G3 data: (1) reserve=7 all-correct fires backfill (reserve_consumed>0) and brings all 8 applicable misconceptions to the floor within the 42 budget; (2) reserve=0 is inert end-to-end; (3) replay is idempotent. Smoke G2-G5 complete at 15/30/45/60 (unchanged). The output `misconception_signals` field is still pending (checkpoint 4).
 
-## Misconception-coverage layer — Checkpoint 4: the misconception_signals output (LAYER COMPLETE)
+## Misconception-coverage layer - Checkpoint 4: the misconception_signals output (LAYER COMPLETE)
 
 Adds the per-misconception three-state triage signal (spec section 7) as a sibling to the verdicts array. `engine/misconception.py` gains the signal-state constants, a `MisconceptionSignal` dataclass, and the pure `derive_misconception_signals(session, *, misconception_target)`. `engine/api/schemas.py` gains `MisconceptionSignalPayload` and an optional `misconception_signals` field on `SessionResponseResult`, `SessionEndResult`, and `VerdictsResult`. The route emits it on session completion, on `/end`, and on `/verdicts` (the last derives it from the persisted session - no new storage).
 
@@ -296,7 +579,7 @@ This completes the misconception-coverage selection layer (opportunistic pick + 
 
 Replaces the misconception verdict semantics. `derive_misconception_signals` now uses an accuracy band on correct/asked over all tagged asks (>=0.75 likely_absent, <0.50 likely_present, else unsure; below-target forces unsure). The backfill "pass B" tie-trigger is replaced by a reachability gate: at/above the floor, ask one more iff not yet cleared (acc<0.75) and 0.75 still reachable within cap=target+x. Both are shared pure functions (`misconception_verdict`, `wants_misconception_extra`) so controller and verdict cannot drift; thresholds are named constants (0.75 clear, 0.50 present). Default `misconception_conditional_extra` 1->2. The `shortfall` field is removed from the signal dataclass and the API payload (shortfall == unsure now). Engine version 0.1.0 -> 0.7.0.
 
-Tests: 564 -> 576 (new test_verdict_rule_v7.py with the spec's 12 cases; test_misconception_signals rewritten for bands; pass-B controller test rewritten for the gate). Unit-level Monte Carlo reproduces the spec Section 7 (false-clear ~halved). System harness at production reserves confirms budget never exceeded. NOTE: the v6 reserve-size recommendations are stale for misconception coverage under v7 and need re-deriving.
+Tests: 564 -> 576 (new test_verdict_rule_v7.py with the spec's 12 cases; test_misconception_signals rewritten for bands; pass-B controller test rewritten for the gate). Unit-level Monte Carlo reproduces the spec Section 7 (false-clear ~halved). System harness at production reserves confirms budget never exceeded. NOTE: the v6 reserve-size recommendations are stale for misconception coverage under v7 and need re-deriving. CLOSED (v7 shipped): the re-derived reserves are now shipped in `config/engine_config.yaml` (and `engine/cli.py`) as G2 7, G3 11, G4 15, G5 19, and the over-budget fraction is 0.000 at every grade - these ARE the re-derived v7 reserves, so nothing further is outstanding here.
 
 ## v7 follow-up: misconception parameters config-plumbed
 Added a `misconception` config block (target 2, conditional_extra 2, clear_threshold 0.75, present_threshold 0.50) so all four are deployment-tunable via engine_config.yaml + get_engine_params, replacing the EngineParams/pool defaults and module-constant-only path. The shared verdict/gate functions take threshold args defaulting to the constants (direct calls unchanged). reserve_size set to 25% (7/11/15/19) in config. Tests 576 -> 583 (target=3 switch + threshold-tunability). Engine behaviour at defaults is byte-identical.

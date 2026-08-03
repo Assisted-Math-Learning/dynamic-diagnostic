@@ -36,15 +36,28 @@ def resolve(pool, qid, grade):
     return skill, row.slip, row.guess, (pool.misconceptions_for_item(item) or {})
 
 
-def base_first_follow(trees, budget, rng, mastery, pool, grade):
+def base_first_follow(trees, budget, rng, mastery, pool, grade,
+                      answered=None, items=None):
     """Three-pass base-first walk with the global cap (Section 8.1). Returns
     (history, qcount) with history in show order; qcount never exceeds budget.
-    Thin wrapper over the pure follow_capped with a pool-based answer model."""
+    Thin wrapper over the pure follow_capped with a pool-based answer model.
+
+    Mixed-mode (v11 sections 6-7): pass `answered` (item -> is_correct of the
+    UNIFIED history so far) and `items` (op -> list parallel to trees[op].questions)
+    to RESUME the walk from an online prefix - it routes past already-answered
+    items and asks only from the first unanswered node, spending the remaining
+    unified budget. Use items_for(trees, pool) to build the `items` map."""
     def answer_fn(qid, op):
         sk, slip, guess, tags = resolve(pool, qid, grade)
         correct = rng.random() < ((1 - slip) if mastery.get(sk, False) else guess)
         return correct, (qid, sk, correct, slip, guess, tags)
-    return follow_capped(trees, budget, answer_fn)
+    return follow_capped(trees, budget, answer_fn, answered=answered, items=items)
+
+
+def items_for(trees, pool):
+    """op -> list of items parallel to trees[op].questions (what the shipped
+    artifact carries as its `items` array; the device matches in item space)."""
+    return {op: [pool._qxid_to_item[x] for x in trees[op].questions] for op in trees}
 
 
 def by_op_uncertain(skills, skill_to_op):
@@ -133,6 +146,60 @@ def main(grade, levels):
               f"{st.mean(qs):5.1f}  {max(qs):3d}   {over/N:5.2f} | {det}")
 
 
+def run_mixed_sweep(cfg, lattice, pool, grade, n):
+    """Large-sample mixed-mode equivalence sweep (v11 section 16). For n learners:
+    capture a pure-online session, split it at a varied point into an online
+    prefix + an offline batch, apply the prefix online and fold the batch in via
+    the real ingest, and compare the mixed verdicts to the pure-online verdicts on
+    the same answers. Reports verdict mismatches (must be 0) - the several-hundred-
+    session analogue of the offline path's residual-gap run, on top of the CI
+    equivalence tests. Run: python offline_followsim.py mixed <grade> <n>."""
+    from datetime import datetime, timedelta, timezone
+    from offline_scorer import run_online_capture
+    from engine.offline_ingest import OfflineAnswer, apply_offline_batch
+    params = full_params(cfg, lattice, grade)
+    applic = pool.applicable_misconceptions(TENANT, grade, params.skills_in_scope)
+    budget = params.routing_config.total_budget
+    mism = done = over = 0
+    offfrac = []
+    for sd in range(n):
+        steps, on_skills, _ = run_online_capture(cfg, lattice, pool, grade, TENANT, sd)
+        if len(steps) < 3:
+            continue
+        k = 1 + (sd % (len(steps) - 1))                    # varied split point
+        prefix, batch = steps[:k], steps[k:]
+        res = start_session(sub_session_id="mx", learner_id="l", tenant_id=TENANT,
+                            class_id="c", grade=grade, engine_version="mx", params=params)
+        s = res.session
+        s.misconception_applicable = applic
+        for (qid, sk, correct, slip, guess, tags) in prefix:
+            s.pending_question_misconceptions = tags
+            record_response(s, skill_id=sk, question_id=qid, is_correct=correct,
+                            params=params, slip_override=slip, guess_override=guess,
+                            defer_next=True)
+        t0 = datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc)
+        entries = [OfflineAnswer(question_x_id=q[0], skill_id=q[1], is_correct=q[2],
+                                 raw_response="x", asked_at=t0 + timedelta(minutes=i))
+                   for i, q in enumerate(batch)]
+        ing = apply_offline_batch(s, resume_anchor=prefix[-1][0], entries=entries,
+                                  tree_id=f"Delhi/g{grade}", tree_version=1, cfg=cfg,
+                                  lattice=lattice, pool=pool, grade=grade, tenant=TENANT)
+        mixed = {v.skill_id: v.confidence_label.value
+                 for v in compute_verdicts(ing.session, params=params)}
+        mism += (mixed != on_skills)
+        over += (ing.session.questions_total > budget)
+        offfrac.append(len(batch) / max(1, len(steps)))
+        done += 1
+    print(f"G{grade} mixed sweep: {done} sessions | verdict mismatches vs pure-online: "
+          f"{mism} (expect 0) | over-budget: {over} (expect 0) | mean offline fraction "
+          f"{st.mean(offfrac):.2f}")
+    return {"sessions": done, "mismatches": mism, "over_budget": over}
+
+
 if __name__ == "__main__":
-    grade = int(sys.argv[1]); levels = [int(x) for x in sys.argv[2].split(",")]
-    main(grade, levels)
+    if len(sys.argv) > 1 and sys.argv[1] == "mixed":
+        cfg, lattice, pool, fps = G.load()
+        run_mixed_sweep(cfg, lattice, pool, int(sys.argv[2]), int(sys.argv[3]))
+    else:
+        grade = int(sys.argv[1]); levels = [int(x) for x in sys.argv[2].split(",")]
+        main(grade, levels)

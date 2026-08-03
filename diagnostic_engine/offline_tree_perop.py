@@ -38,12 +38,20 @@ def perop_params(cfg, lattice, grade, op):
 
 class PerOpBuilder:
     def __init__(self, cfg, lattice, pool, grade, op, tenant="Delhi", posterior_mode="round3",
-                 allowance=0, backfill=True):
+                 allowance=0, backfill=True, switched_off=None):
         self.cfg, self.lattice, self.pool, self.grade, self.op = cfg, lattice, pool, grade, op
         self.tenant = tenant
         self.posterior_mode = posterior_mode
         self.allowance = allowance
         self.backfill = backfill
+        # Deactivation Failsafe mechanism 3a (spec section 6a): variants switched
+        # off at build time are excluded from the tree. Fed to the same candidate
+        # filter as the retired list via the synthetic session below; the walk's
+        # every pick then skips them and an item with no usable variant is not
+        # placed. Constant for the build, so sharing it across clones is safe and
+        # it does not enter the memo state key. Empty by default (the bundle has
+        # no live pool to query; the set is supplied by the caller/service).
+        self.switched_off = set(switched_off or ())
         self.params, self.op_skills, self.base_cap = perop_params(cfg, lattice, grade, op)
         self.target = cfg.misconception.target
         self.applicable = pool.applicable_misconceptions(tenant, grade, self.op_skills)
@@ -140,6 +148,7 @@ class PerOpBuilder:
                             engine_version="gen", params=self.params)
         s = res.session
         s.misconception_applicable = self.applicable
+        s.switched_off_question_x_ids = self.switched_off      # mechanism 3a (build input)
         s._hv = 0
         s._phase = 0   # the anchor question is a base (Phase-1) pick
         if res.first_question is not None:

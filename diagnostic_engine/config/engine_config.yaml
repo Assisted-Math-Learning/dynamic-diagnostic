@@ -9,7 +9,7 @@
 # canonical data sources (the milestone CSV, anchor_recommendations_v3.xlsx,
 # priors_table.csv). See the CLI step or the README for the workflow.
 
-version: "0.9.0"
+version: "0.10.0"
 
 algorithm:
   slip: 0.10

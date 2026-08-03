@@ -1,4 +1,4 @@
-# v9 integration branch — change manifest
+# v9 integration branch - change manifest
 
 One coupled branch off `diagnostic_engine_v8` (engine 0.8.0). Final state: **597 tests green** (588 existing + 8 integration + 1 version-stamp). The Changes section below is the original 8; the post-review fixes (P0-1/P0-4/P2-4 and the entry-preferring lookup) landed on the same branch and are listed at the end. Nothing in the engineering-team scope was touched.
 
@@ -9,9 +9,9 @@ One coupled branch off `diagnostic_engine_v8` (engine 0.8.0). Final state: **597
 2. **Seven-field lookup.** `inputs/tenant_question_lookup_v2.csv` replaced with the bundle's seven-field lookup (2,536 rows, drop-in). Item-key parity: zero silent misses against params; zero six-field division remnants in either file; all division items seven-field. (Post-review, this file was regenerated with the entry-preferring tiebreak; see the post-review section.)
 
 3. **Stage B in-process integration.** New `engine/stage_b_integration.py`:
-   - `parse_item` — guarded positional parse (exactly 6 or 7 fields, integer operands, `True`/`False` seventh field, raises otherwise).
-   - `build_responses_payload` — recovers each answered question's `item` via `pool._qxid_to_item`, takes operation/n1/n2/q_type from the item, passes the division flag as a **real bool** (`parts[6] == "True"`), and sources the raw response from an injected `raw_response_of(question_id)` callable.
-   - `run_stage_b` — `compute_verdicts` → mastery payload, session → responses payload, `aml_stageb.build_learning_state`, returns the merged learning state.
+   - `parse_item` - guarded positional parse (exactly 6 or 7 fields, integer operands, `True`/`False` seventh field, raises otherwise).
+   - `build_responses_payload` - recovers each answered question's `item` via `pool._qxid_to_item`, takes operation/n1/n2/q_type from the item, passes the division flag as a **real bool** (`parts[6] == "True"`), and sources the raw response from an injected `raw_response_of(question_id)` callable.
+   - `run_stage_b` - `compute_verdicts` → mastery payload, session → responses payload, `aml_stageb.build_learning_state`, returns the merged learning state.
    - Classifier package vendored at repo-root `stage_b_classifier/` (flat imports; path wired in the glue).
 
 4. **Test reconciliation (not behavior changes):**
@@ -29,7 +29,7 @@ One coupled branch off `diagnostic_engine_v8` (engine 0.8.0). Final state: **597
 
 ## Flags / notes for follow-up (not blockers)
 
-- **Raw response is an injected dependency.** The session stores only `is_correct`, not the raw response string the classifier needs. The glue takes it via `raw_response_of(question_id)` — the stand-in for the response-fetch endpoint (8.4). The 8.4 endpoint (engineering-team scope) must supply raw responses for production Stage B.
+- **Raw response is an injected dependency.** The session stores only `is_correct`, not the raw response string the classifier needs. The glue takes it via `raw_response_of(question_id)` - the stand-in for the response-fetch endpoint (8.4). The 8.4 endpoint (engineering-team scope) must supply raw responses for production Stage B.
 - **Section 2 secondary observations left unchanged** per the note: Delhi 36/3 grade-3 variant `q_dlg3_div_00611_b` (vs `_z`), and the Karnataka 36/3 entry-test variant. Engine-owner decisions.
 - **Prototype e2e harness superseded and not shipped.** The earlier standalone `test_stageb_e2e.py` targeted old prototype paths; its intent is covered by `tests/test_stage_b_integration.py` (including the e2e and the `bool("False")` resolver regression). It is not included in this bundle.
 - **Seventh field currently inert** (no two-format division pairs in this bank); retained as the committed, future-proof requirement. Whether to keep it long-term is the engine owner's open call.

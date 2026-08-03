@@ -188,6 +188,15 @@ class Session:
     # "resuming" if a later backfill answer un-resolves a skill. None until
     # Phase 1 ends; stays None for the whole session when reserve_size is 0.
     reserve_phase_started_at: Optional[int] = None
+    # Deactivation Failsafe (spec sections 4-5). switched_off_question_x_ids is
+    # the persistent per-session set of variants content ops has switched off on
+    # the app (mechanism 1); declined_question_x_ids is the transient set of
+    # variants declined this turn via replace-question (mechanism 2). Both are
+    # variant-level (question_x_id) and feed the same candidate filter as the
+    # retired list. They govern future OFFERING only - never the scoring of an
+    # answer already recorded.
+    switched_off_question_x_ids: Set[str] = field(default_factory=set)
+    declined_question_x_ids: Set[str] = field(default_factory=set)
     # The chosen question's 11 tags, stashed by the route alongside the slip/
     # guess overrides and read+cleared by record_response to update the ledger.
     # None when the pool carried no tags (legacy mode).

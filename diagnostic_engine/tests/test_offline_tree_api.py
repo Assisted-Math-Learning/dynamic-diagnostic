@@ -83,7 +83,8 @@ def test_delhi_session_start_has_offline_tree_ref(client, grade):
     assert ref is not None, f"Delhi G{grade} should carry an offline_tree reference"
     assert ref["available"] is True
     assert ref["grade"] == grade
-    assert ref["engine_version"] == "0.9.0"
+    assert ref["engine_version"] == engine.__version__     # 0.10.0
+    assert ref["tree_compat_version"] == 1
     assert ref["size_bytes"] > 0
     assert ref["fetch_path"] == f"{PREFIX}/offline-tree/Delhi/{grade}"
     assert len(ref["sha256"]) == 64
@@ -97,7 +98,8 @@ def test_g7_session_start_resolves_to_g5_tree(client):
     ref = r.json()["result"]["offline_tree"]
     assert ref is not None
     assert ref["grade"] == 5
-    assert ref["engine_version"] == "0.9.0"
+    assert ref["engine_version"] == engine.__version__     # 0.10.0
+    assert ref["tree_compat_version"] == 1
     assert ref["fetch_path"] == f"{PREFIX}/offline-tree/Delhi/5"
 
 
@@ -117,9 +119,13 @@ def test_fetch_offline_tree_roundtrip_matches_reference(client):
     assert len(body) == ref["size_bytes"]
     assert hashlib.sha256(body).hexdigest() == ref["sha256"]
     doc = json.loads(body)
-    assert doc["engine_version"] == "0.9.0"
+    assert doc["engine_version"] == engine.__version__     # 0.10.0
+    assert doc["tree_compat_version"] == 1
     assert doc["tenant"] == "Delhi"
     assert doc["grade"] == 5
+    # v11: the artifact now carries an items array parallel to questions.
+    add = doc["trees"]["Addition"]
+    assert len(add["items"]) == len(add["questions"])
 
 
 def test_fetch_offline_tree_404_for_missing(client):

@@ -244,6 +244,10 @@ def _endpoint_id_for_path(path: str) -> str:
         return "api.diagnostic.session.response"
     if path.endswith("/end"):
         return "api.diagnostic.session.end"
+    if path.endswith("/offline-batch"):
+        return "api.diagnostic.session.offline_batch"
+    if path.endswith("/replace-question"):
+        return "api.diagnostic.session.replace_question"
     if path.endswith("/responses"):
         return "api.diagnostic.session.responses"
     if "/offline-tree/" in path:

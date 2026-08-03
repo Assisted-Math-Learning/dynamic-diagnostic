@@ -8,6 +8,7 @@ section 6.3.
 """
 
 from typing import Dict, List, Literal, Optional
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +37,12 @@ class SessionStartRequest(_StrictBase):
     # Pydantic layer; mapped to INVALID_GRADE by the global exception
     # handler so the error envelope shape is unchanged.
     grade: int = Field(ge=2, le=8)
+    # Deactivation Failsafe (spec section 4). Optional: the variants currently
+    # switched off on the app. Applied in the candidate filter; persists on the
+    # session. `replace` (default) overwrites the session's set (also how a
+    # question is switched back on, and an empty list clears it); `append` adds.
+    switched_off_question_x_ids: Optional[List[str]] = None
+    switched_off_mode: Literal["replace", "append"] = "replace"
 
 
 class SessionResponseRequest(_StrictBase):
@@ -47,6 +54,10 @@ class SessionResponseRequest(_StrictBase):
     question_x_id: str = Field(min_length=1)
     is_correct: bool
     response_time_ms: Optional[int] = Field(default=None, ge=0)
+    # Deactivation Failsafe (spec section 4): optional switched-off update on the
+    # submit-answer call (which selects the next question). See SessionStartRequest.
+    switched_off_question_x_ids: Optional[List[str]] = None
+    switched_off_mode: Literal["replace", "append"] = "replace"
     # raw_response is the learner's typed answer, for Stage B (misconception
     # classification) ONLY. It is deliberately declared here so it is allow-
     # listed past the extra='forbid' PII guard; mastery never consumes it
@@ -112,6 +123,49 @@ class MisconceptionSignalPayload(BaseModel):
 # Response result payloads ---------------------------------------------------
 
 
+class OfflineAnswerItem(_StrictBase):
+    """One learner answer collected during an offline segment (mixed-mode v11
+    section 9). raw_response IS included for offline answers (not optional) so
+    they feed Stage B misconception classification exactly as online answers do;
+    the server derives item and calibration from the pool by question_x_id, so
+    the batch need not send them. asked_at reuses the existing history-entry
+    field for chronological placement within the offline block."""
+    question_x_id: str = Field(min_length=1)
+    skill_id: str = Field(min_length=1)
+    is_correct: bool
+    raw_response: str
+    asked_at: datetime
+
+
+class OfflineBatchRequest(_StrictBase):
+    """Ingest of a completed offline segment (mixed-mode v11 section 9). The tree
+    fields are batch-level (one tree per offline segment). resume_anchor is the
+    question_x_id of the last answer before the drop (from the resumption token),
+    used to place this block in chronological order; it may be null if the drop
+    happened before any answer."""
+    learner_id: str = Field(min_length=1)
+    tenant_id: str = Field(min_length=1)
+    resume_anchor: Optional[str] = None
+    tree_id: str = Field(min_length=1)
+    tree_version: int
+    tree_compat_version: int
+    answers: List[OfflineAnswerItem]
+    # Deactivation Failsafe (spec section 4): optional switched-off update on the
+    # ingest call (which returns the next online question). See SessionStartRequest.
+    switched_off_question_x_ids: Optional[List[str]] = None
+    switched_off_mode: Literal["replace", "append"] = "replace"
+
+
+class ReplaceQuestionRequest(_StrictBase):
+    """POST /session/:id/replace-question - decline the offered question and get a
+    different one (Deactivation Failsafe mechanism 2, spec section 5). The declined
+    question_x_id joins a transient per-session set (separate from the switched-off
+    list); no answer is recorded and no budget is spent."""
+    learner_id: str = Field(min_length=1)
+    tenant_id: str = Field(min_length=1)
+    question_x_id: str = Field(min_length=1)
+
+
 class OfflineTreeRef(BaseModel):
     """A lightweight reference to a precomputed offline decision tree.
 
@@ -128,9 +182,42 @@ class OfflineTreeRef(BaseModel):
     available: bool
     grade: int
     engine_version: str
+    # The tree's compatibility version - the value the device echoes back in the
+    # offline-batch, and what the serving guard checks (mixed-mode v11 decision
+    # 8). engine_version is retained for information only; it no longer gates
+    # serving.
+    tree_compat_version: int
     size_bytes: int
     sha256: str
     fetch_path: str
+
+
+class ResumptionEntry(BaseModel):
+    """One answered entry in the resumption token (mixed-mode v11 section 8). The
+    device needs `item` and `operation` to run entry-point matching / no-repeat in
+    item space and to structure the offline walk - neither is derivable from the
+    shipped artifact (which carries skill and calibration only), so the server
+    supplies them here. `item` is None only if the id is not in the pool."""
+    question_x_id: str
+    is_correct: bool
+    item: Optional[str]
+    skill_id: str
+    operation: Optional[str]
+    asked_at: datetime
+
+
+class ResumptionToken(BaseModel):
+    """Server-pushed resumption snapshot (mixed-mode v11 section 8, decision 1).
+    The device caches the latest one and, on a connectivity drop, uses it to seed
+    the offline walk from the unified history. `resume_anchor` is the
+    question_x_id of the last answer recorded so far - echoed back in the
+    offline-batch to place it in chronological order (section 9); None before any
+    answer. `budget_used` == len(answers), the unified budget already spent. The
+    posteriors block (for the deferred confident-skill enhancement, decision 4)
+    is intentionally omitted in v1."""
+    resume_anchor: Optional[str] = None
+    budget_used: int
+    answers: List[ResumptionEntry]
 
 
 class SessionStartResult(BaseModel):
@@ -142,6 +229,9 @@ class SessionStartResult(BaseModel):
     # inlined tree). Sibling of the verdicts/misconception payloads.
     offline_tree: Optional[OfflineTreeRef] = None
     question_budget: int
+    # The resumption snapshot to cache for offline use (mixed-mode v11 section 8).
+    # At session start the history is empty (resume_anchor None, answers []).
+    resumption_token: Optional[ResumptionToken] = None
 
 
 class SessionResponseResult(BaseModel):
@@ -159,6 +249,10 @@ class SessionResponseResult(BaseModel):
     questions_remaining_budget: Optional[int] = None
     verdicts: Optional[List[VerdictPayload]] = None
     misconception_signals: Optional[List[MisconceptionSignalPayload]] = None
+    # Refreshed resumption snapshot to cache for offline use (mixed-mode v11
+    # sections 8, 10 - the token is refreshed on every online turn and after
+    # every ingest). None once the session is complete (no offline continuation).
+    resumption_token: Optional[ResumptionToken] = None
 
 
 class SessionEndResult(BaseModel):

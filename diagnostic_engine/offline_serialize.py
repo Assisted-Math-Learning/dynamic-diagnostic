@@ -13,6 +13,19 @@ from offline_scorer import full_params
 from engine import __version__ as ENGINE_VERSION   # real engine version (no drift)
 
 TENANT = "Delhi"
+# Offline-serving compatibility version (mixed-mode spec v11, decision 8). A
+# small integer independent of engine_version; the serving guard checks THIS,
+# not an exact engine_version match, so a plain engine bump no longer strands
+# the trees. Bump only on a tree-format change or a calibration/Bayes/lattice/
+# verdict/selection change. Initial value 1 (0.9.0 artifacts carried no field);
+# the `items` array added this release is a format change, hence 1.
+TREE_COMPAT_VERSION = 1
+# Deactivation Failsafe mechanism 3a (spec section 6a): variants switched off at
+# build time, excluded from generated trees. Empty here - the bundle has no live
+# pool to query; a production build supplies the set. A switched-off change does
+# NOT bump TREE_COMPAT_VERSION (decision 8): old trees stay valid, the device skip
+# rule handles any switched-off question still in them.
+SWITCHED_OFF = frozenset()
 ALLOWANCE = {2: 3, 3: 4, 4: 4, 5: 3}          # locked (spec Section 5.2)
 OPS = ["Addition", "Subtraction", "Multiplication", "Division"]
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "artifact")
@@ -37,9 +50,13 @@ def serialize_grade(cfg, lattice, pool, fps, grade):
     trees, all_xids = {}, set()
     for op in OPS:
         b = P.PerOpBuilder(cfg, lattice, pool, grade, op, tenant=TENANT,
-                           allowance=ALLOWANCE[grade]).build()
-        trees[op] = {"root": b.root, "questions": b.questions, "nodes": b.nodes,
-                     "allowance": b.allowance, "base_cap": b.base_cap}
+                           allowance=ALLOWANCE[grade], switched_off=SWITCHED_OFF).build()
+        # items[i] is the item (operand-level key) of questions[i]. The device
+        # cannot derive item from calibration (skill only), so the artifact
+        # carries it for in-item-space entry-point matching (v11 sections 6, 11).
+        items = [pool._qxid_to_item[x] for x in b.questions]
+        trees[op] = {"root": b.root, "questions": b.questions, "items": items,
+                     "nodes": b.nodes, "allowance": b.allowance, "base_cap": b.base_cap}
         all_xids.update(b.questions)
     calibration = {x: calib_for(pool, x, grade) for x in sorted(all_xids)}
     raw_edges = G.smoke.step_1_load_data(G.PROJECT)[3]
@@ -57,6 +74,7 @@ def serialize_grade(cfg, lattice, pool, fps, grade):
     }
     doc = {
         "tenant": TENANT, "grade": grade, "engine_version": ENGINE_VERSION,
+        "tree_compat_version": TREE_COMPAT_VERSION,
         "allowance": ALLOWANCE[grade], "budget": rc.total_budget,
         "provenance": {
             "lattice_version": fps["lattice"],
@@ -66,7 +84,7 @@ def serialize_grade(cfg, lattice, pool, fps, grade):
             "lookup_fingerprint": fps["lookup"], "retired_fingerprint": fps["retired"],
             "tenant": TENANT},
         "params": params_block,
-        "trees": {op: {k: trees[op][k] for k in ("root", "questions", "nodes")}
+        "trees": {op: {k: trees[op][k] for k in ("root", "questions", "items", "nodes")}
                   for op in OPS},
     }
     return doc, trees

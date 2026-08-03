@@ -1422,8 +1422,8 @@ def test_verdict_end_to_end_carries_default_engine_version(
     test_config, test_storage, test_lattice, test_tenant_tokens
 ):
     """P0-1: with no ENGINE_VERSION override the app defaults to engine.__version__,
-    so a completed session (which produces the verdicts) is stamped 0.9.0."""
-    assert engine.__version__ == "0.9.0"
+    so a completed session (which produces the verdicts) is stamped with it."""
+    assert engine.__version__ == "0.10.0"
     app = create_app(
         config=test_config,
         storage=test_storage,
@@ -1460,7 +1460,7 @@ def test_verdict_end_to_end_carries_default_engine_version(
         q = res["next_question"]
     assert verdicts is not None and len(verdicts) > 0
     # The session that produced the verdicts carries the default engine version.
-    assert test_storage.get_session("s1").engine_version == "0.9.0"
+    assert test_storage.get_session("s1").engine_version == "0.10.0"
 
 
 # === TestRawResponseB2 (B2: raw_response persistence + 8.4 responses fetch) ==

@@ -421,6 +421,38 @@ class CsvQuestionPool(QuestionPool):
         rows = self._item_rows.get(item, {})
         return rows.get(str(grade)) or rows.get(_ALL_GRADE)
 
+    def _answered_items(self, session) -> Set[str]:
+        """The set of items already answered anywhere in this session, in item
+        space. This is the single source of the no-repeat contract (mixed-mode
+        v11 section 7): it reads the ENTIRE ``question_history`` regardless of
+        ``routing_mode``, so online and ``offline_replay`` answers are treated
+        identically, and it maps each ``question_x_id`` to its ``item`` (online
+        and offline can serve different display variants of the same item, so
+        the check must be in item space). An entry whose id is not in the pool
+        maps to ``None`` and is dropped. Do NOT filter this by routing_mode or
+        segment - that would let a mixed session re-ask an item answered in
+        another segment.
+        """
+        items = {
+            self._qxid_to_item.get(entry.question_id)
+            for entry in session.question_history
+        }
+        items.discard(None)
+        return items
+
+    @staticmethod
+    def _excluded_xids(session) -> "Set[str]":
+        """question_x_ids the session must not be offered (Deactivation Failsafe
+        mechanisms 1-2): the persistent switched-off set plus the transient
+        declined set. Both are variant-level and combine with the retired and
+        no-repeat exclusions in the same candidate filter. Governs future
+        offering only; never affects the scoring of an answer already given."""
+        off = getattr(session, "switched_off_question_x_ids", None) or set()
+        declined = getattr(session, "declined_question_x_ids", None) or set()
+        if not off and not declined:
+            return frozenset()
+        return set(off) | set(declined)
+
     def pick_question_for_skill(
         self,
         *,
@@ -444,6 +476,7 @@ class CsvQuestionPool(QuestionPool):
         # question exists for the skill). In legacy mode (no lookup) both filters
         # are skipped and behaviour is unchanged.
         tenant_filtered = list(items)
+        excluded_xids = self._excluded_xids(session)          # switched-off + declined
         if self._has_lookup:
             available = self._tenant_items.get(tenant_id, set())
             tenant_filtered = [
@@ -451,6 +484,7 @@ class CsvQuestionPool(QuestionPool):
                 if i in available                                  # tenant can serve it
                 and i not in self._retired_items                   # not item-retired
                 and self._tenant_item_xid.get((tenant_id, i)) not in self._retired_xids
+                and self._tenant_item_xid.get((tenant_id, i)) not in excluded_xids  # switched-off/declined
             ]
             if not tenant_filtered:
                 raise NoQuestionForSkillError(
@@ -458,12 +492,8 @@ class CsvQuestionPool(QuestionPool):
                     f"{tenant_id!r} (after retired and availability filters)"
                 )
 
-        # Step 4: no-repeat. Map each historical question_id back to its item.
-        asked_items = {
-            self._qxid_to_item.get(entry.question_id)
-            for entry in session.question_history
-        }
-        asked_items.discard(None)
+        # Step 4: no-repeat (item space, whole history - see _answered_items).
+        asked_items = self._answered_items(session)
         candidates = [i for i in tenant_filtered if i not in asked_items]
         if not candidates:
             raise NoQuestionForSkillError(
@@ -474,8 +504,11 @@ class CsvQuestionPool(QuestionPool):
         resolved: List[Tuple[str, _ParamRow]] = []
         for item in candidates:
             row = self._resolve_row(item, grade)
-            if row is not None:
-                resolved.append((item, row))
+            if row is None:
+                continue
+            if not self._has_lookup and row.q_x_id in excluded_xids:
+                continue                        # legacy-mode switched-off / declined
+            resolved.append((item, row))
         if not resolved:
             # No candidate has a row for this grade or an 'all' row. On the
             # current data this cannot happen (every item has an 'all' row);
@@ -624,13 +657,10 @@ class CsvQuestionPool(QuestionPool):
         if not needed or not self._item_flags:
             return None
 
-        # No-repeat across the whole session (every phase), same mapping as the
-        # window pick's step 4.
-        asked_items = {
-            self._qxid_to_item.get(entry.question_id)
-            for entry in session.question_history
-        }
-        asked_items.discard(None)
+        # No-repeat across the whole session (every phase, item space) - see
+        # _answered_items.
+        asked_items = self._answered_items(session)
+        excluded_xids = self._excluded_xids(session)          # switched-off + declined
         available = (
             self._tenant_items.get(tenant_id, set()) if self._has_lookup else None
         )
@@ -652,6 +682,8 @@ class CsvQuestionPool(QuestionPool):
                         continue
                     if self._tenant_item_xid.get((tenant_id, item)) in self._retired_xids:
                         continue
+                    if self._tenant_item_xid.get((tenant_id, item)) in excluded_xids:
+                        continue                # switched-off / declined
                 flags = self._item_flags.get(item)
                 if not flags:
                     continue
@@ -661,6 +693,8 @@ class CsvQuestionPool(QuestionPool):
                 row = self._resolve_row(item, grade)
                 if row is None:
                     continue
+                if not self._has_lookup and row.q_x_id in excluded_xids:
+                    continue                    # legacy-mode switched-off / declined
                 if adv > best_adv:
                     best_adv = adv
                     winners = [(skill, item, row)]

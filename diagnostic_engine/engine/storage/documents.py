@@ -18,7 +18,7 @@ per-skill timestamps a future refinement can walk question_history.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from engine.lattice import LatticeEdge
@@ -112,6 +112,21 @@ def session_to_doc(session: Session) -> Dict[str, Any]:
     }
 
 
+def _as_utc(dt):
+    """Normalize a datetime read back from storage to timezone-aware UTC.
+
+    PyMongo returns BSON dates as timezone-NAIVE unless the client is built with
+    tz_aware=True (which it now is), but this guard also covers a client
+    constructed without that flag and any documents already persisted naive. The
+    engine always writes aware UTC datetimes (datetime.now(timezone.utc)), so a
+    naive value read back is UTC and just needs its tzinfo reattached. Without
+    this, subtracting a reloaded (naive) started_at from a freshly-set (aware)
+    ended_at raises 'can't subtract offset-naive and offset-aware datetimes'."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def doc_to_session(doc: Dict[str, Any]) -> Session:
     """Convert a MongoDB document back into a Session dataclass."""
     posteriors_nested = doc.get("posteriors", {})
@@ -130,8 +145,8 @@ def doc_to_session(doc: Dict[str, Any]) -> Session:
         class_id=doc["class_id"],
         grade=int(doc["grade"]),
         status=SessionStatus(doc["status"]),
-        started_at=doc["started_at"],
-        ended_at=doc.get("ended_at"),
+        started_at=_as_utc(doc["started_at"]),
+        ended_at=_as_utc(doc.get("ended_at")),
         engine_version=doc["engine_version"],
         posteriors=posteriors,
         direct_obs_count=direct_obs_count,
@@ -184,7 +199,7 @@ def _doc_to_history_entry(doc: Dict[str, Any]) -> QuestionHistoryEntry:
         question_id=doc["question_id"],
         skill_id=doc["skill_id"],
         is_correct=bool(doc["is_correct"]),
-        asked_at=doc["asked_at"],
+        asked_at=_as_utc(doc["asked_at"]),
         posterior_before=float(doc["posterior_before"]),
         posterior_after=float(doc["posterior_after"]),
         purpose=Purpose(doc["purpose"]),

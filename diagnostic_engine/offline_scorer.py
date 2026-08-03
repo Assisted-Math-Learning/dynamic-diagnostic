@@ -18,29 +18,10 @@ from engine.misconception import derive_misconception_signals
 TENANT_DEFAULT = "Delhi"
 
 
-def full_params(cfg, lattice, grade):
-    return cfg.get_engine_params(grade, lattice)
-
-
-def score_history(steps, cfg, lattice, pool, grade, tenant, return_session=False):
-    """Section 7: replay history -> (skill labels, misconception states). Exact."""
-    params = full_params(cfg, lattice, grade)
-    res = start_session(sub_session_id="score", learner_id="s", tenant_id=tenant,
-                        class_id="c", grade=grade, engine_version="score", params=params)
-    s = res.session
-    s.misconception_applicable = pool.applicable_misconceptions(tenant, grade, params.skills_in_scope)
-    for (qid, skill, correct, slip, guess, tags) in steps:
-        s.pending_question_misconceptions = tags
-        record_response(s, skill_id=skill, question_id=qid, is_correct=correct,
-                        params=params, slip_override=slip, guess_override=guess, defer_next=True)
-    skills = {v.skill_id: v.confidence_label.value for v in compute_verdicts(s, params=params)}
-    sigs = {x.misconception: x.state for x in derive_misconception_signals(
-        s, misconception_target=cfg.misconception.target,
-        clear_threshold=cfg.misconception.clear_threshold,
-        present_threshold=cfg.misconception.present_threshold)}
-    if return_session:
-        return skills, sigs, s
-    return skills, sigs
+# full_params and score_history now live in engine/history_scorer.py (promoted so
+# the offline-batch ingest route can call them and they run under CI). Re-exported
+# here for existing callers (offline_serialize, this module's validation main).
+from engine.history_scorer import full_params, score_history  # noqa: F401
 
 
 def run_online_capture(cfg, lattice, pool, grade, tenant, seed):

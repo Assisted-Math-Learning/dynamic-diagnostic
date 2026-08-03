@@ -31,6 +31,14 @@ from engine.api.schemas import OfflineTreeRef
 
 _GRADE_FILE = re.compile(r"^g(\d+)\.json\.gz$")
 
+# Offline-serving compatibility version the engine requires (mixed-mode spec
+# v11, decision 8). The serving guard checks the artifact's tree_compat_version
+# against THIS, not an exact engine_version match, so a plain engine version
+# bump (e.g. 0.9.0 -> 0.10.0) no longer strands the shipped trees. Bump this in
+# lockstep with offline_serialize.TREE_COMPAT_VERSION when a tree-format or
+# scoring/selection change makes old trees wrong.
+REQUIRED_TREE_COMPAT_VERSION = 1
+
 
 def resolve_grade(grade: int) -> Optional[int]:
     """Apply the online engine's grade fallback. Returns the resolved native
@@ -44,9 +52,12 @@ def resolve_grade(grade: int) -> Optional[int]:
 class OfflineTreeRegistry:
     """In-memory registry of serialized offline trees, loaded once."""
 
-    def __init__(self, artifact_dir: str | Path):
+    def __init__(self, artifact_dir: str | Path,
+                 required_compat_version: int = REQUIRED_TREE_COMPAT_VERSION):
         self._dir = Path(artifact_dir)
-        # (tenant, native_grade) -> {engine_version, bytes, size_bytes, sha256}
+        self._required_compat = required_compat_version
+        # (tenant, native_grade) -> {engine_version, tree_compat_version,
+        #                            bytes, size_bytes, sha256}
         self._store: Dict[Tuple[str, int], Dict] = {}
         self._load()
 
@@ -72,6 +83,7 @@ class OfflineTreeRegistry:
                 ).encode("utf-8")
                 self._store[(tenant, grade)] = {
                     "engine_version": str(doc.get("engine_version", "")),
+                    "tree_compat_version": doc.get("tree_compat_version"),
                     "bytes": canonical,
                     "size_bytes": len(canonical),
                     "sha256": hashlib.sha256(canonical).hexdigest(),
@@ -91,40 +103,42 @@ class OfflineTreeRegistry:
         self,
         tenant: str,
         grade: int,
-        running_version: str,
         fetch_path: Callable[[str, int], str],
-        warn: Optional[Callable[[str, int, str, str], None]] = None,
+        warn: Optional[Callable[[str, int, Optional[int], int], None]] = None,
     ) -> Optional[OfflineTreeRef]:
         """Build the OfflineTreeRef for (tenant, grade), or None if there is no
-        servable tree. On engine-version drift the stale tree is NOT served:
-        returns None and calls `warn` (so the caller can log a WARN)."""
+        servable tree. The serving guard checks the artifact's
+        tree_compat_version against the engine's required version (v11 decision
+        8) - NOT an exact engine_version match, so an engine bump does not
+        strand the trees. On a tree_compat_version mismatch the tree is NOT
+        served: returns None and calls `warn`."""
         rg, e = self._entry(tenant, grade)
         if e is None:
             return None
-        if e["engine_version"] != running_version:
+        if e["tree_compat_version"] != self._required_compat:
             if warn is not None:
-                warn(tenant, rg, e["engine_version"], running_version)
+                warn(tenant, rg, e["tree_compat_version"], self._required_compat)
             return None
         return OfflineTreeRef(
             available=True,
             grade=rg,
             engine_version=e["engine_version"],
+            tree_compat_version=e["tree_compat_version"],
             size_bytes=e["size_bytes"],
             sha256=e["sha256"],
             fetch_path=fetch_path(tenant, rg),
         )
 
-    def tree_bytes(
-        self, tenant: str, grade: int, running_version: str
-    ) -> Optional[bytes]:
+    def tree_bytes(self, tenant: str, grade: int) -> Optional[bytes]:
         """Canonical JSON bytes of the serialized tree for (tenant, grade), or
-        None if there is no servable tree OR the version drifted (a stale tree
-        is never served). Used by the fetch endpoint; matches the reference's
-        size_bytes / sha256 exactly."""
+        None if there is no servable tree OR the tree_compat_version does not
+        match the engine's required version (a stale tree is never served).
+        Used by the fetch endpoint; matches the reference's size_bytes / sha256
+        exactly."""
         rg, e = self._entry(tenant, grade)
         if e is None:
             return None
-        if e["engine_version"] != running_version:
+        if e["tree_compat_version"] != self._required_compat:
             return None
         return e["bytes"]
 

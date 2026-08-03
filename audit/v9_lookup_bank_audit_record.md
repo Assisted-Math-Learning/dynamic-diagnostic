@@ -6,7 +6,7 @@
 
 ## 2026-07-06 update: lookup regenerated from the corrected bank; 7 Private rows fixed
 
-**What changed:** The shipped lookup file (`diagnostic_engine_v9/inputs/tenant_question_lookup_v2.csv`) still carried the pre-correction Private `_b` ids on the seven split operands. Those ids do not exist for Private in the corrected bank (Private has only `_z`), so they were orphans: the engine could not have served Private those seven questions. The lookup was regenerated from the corrected all-tenant bank, and the seven Private rows now resolve to `_z`, matching the split-operand table below. This makes the shipped file match what the June-29 verdict had claimed but the file did not yet reflect.
+**What changed:** The shipped lookup file (`diagnostic_engine/inputs/tenant_question_lookup_v2.csv`) still carried the pre-correction Private `_b` ids on the seven split operands. Those ids do not exist for Private in the corrected bank (Private has only `_z`), so they were orphans: the engine could not have served Private those seven questions. The lookup was regenerated from the corrected all-tenant bank, and the seven Private rows now resolve to `_z`, matching the split-operand table below. This makes the shipped file match what the June-29 verdict had claimed but the file did not yet reflect.
 
 **How:** Regenerated with the committed toolchain (`calibration/reference/build_question_lookup.py` + `item_key.py`), the 667-item `question_parameters.csv`, and `retired_questions_v2.csv` (27 item-scope keys), run against the `20260628` corrected all-tenant bank.
 

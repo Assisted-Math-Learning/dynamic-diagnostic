@@ -30,7 +30,9 @@ from engine.api.errors import (
     InvalidGradeError,
     InvalidSkillIdError,
     LearnerMismatchError,
+    NoQuestionForSkillError,
     NoTreeForGradeError,
+    NoUsableQuestionError,
     ResponseConflictError,
     SessionAlreadyEndedError,
     SessionAlreadyExistsError,
@@ -41,7 +43,11 @@ from engine.api.errors import (
 from engine.api.schemas import (
     HealthResult,
     MisconceptionSignalPayload,
+    OfflineBatchRequest,
     QuestionRef,
+    ReplaceQuestionRequest,
+    ResumptionEntry,
+    ResumptionToken,
     RawResponseItem,
     SessionEndRequest,
     SessionEndResult,
@@ -71,6 +77,8 @@ from engine.session import (
 )
 from engine.coverage import select_next_coverage
 from engine.observability.logging import get_logger
+from engine.offline_ingest import OfflineAnswer, apply_offline_batch
+from engine.offline_registry import REQUIRED_TREE_COMPAT_VERSION
 
 router = APIRouter(prefix="/api/v1/diagnostic")
 
@@ -83,6 +91,8 @@ ID_SESSION_END = "api.diagnostic.session.end"
 ID_VERDICTS = "api.diagnostic.session.verdicts"
 ID_OFFLINE_TREE = "api.diagnostic.offline_tree"
 ID_SESSION_RESPONSES = "api.diagnostic.session.responses"
+ID_OFFLINE_BATCH = "api.diagnostic.session.offline_batch"
+ID_REPLACE_QUESTION = "api.diagnostic.session.replace_question"
 
 
 # Helpers ---------------------------------------------------------------------
@@ -108,6 +118,43 @@ def _build_engine_params(request: Request, grade: int):
         return state.config.get_engine_params(grade, state.lattice_index)
     except ValueError as e:
         raise InvalidGradeError(str(e))
+
+
+def _apply_switched_off(session, body) -> None:
+    """Update the session's switched-off set from a selecting call, if supplied
+    (Deactivation Failsafe mechanism 1, spec section 4). Omitted -> the set is
+    left unchanged (the parameter is optional per call). `replace` overwrites the
+    set (an empty list clears it / switches everything back on); `append` adds."""
+    ids = getattr(body, "switched_off_question_x_ids", None)
+    if ids is None:
+        return
+    if getattr(body, "switched_off_mode", "replace") == "append":
+        session.switched_off_question_x_ids = set(
+            session.switched_off_question_x_ids) | set(ids)
+    else:
+        session.switched_off_question_x_ids = set(ids)
+
+
+def _build_resumption_token(session, pool, params) -> ResumptionToken:
+    """Build the resumption snapshot the device caches for offline use
+    (mixed-mode v11 section 8). Carries, per answered entry, question_x_id,
+    is_correct, item, skill, operation, and asked_at (the device cannot derive
+    item/operation from the artifact), plus the resume anchor (the last answer's
+    question_x_id) and the unified budget used. Posteriors are omitted in v1."""
+    entries = []
+    qxid_to_item = getattr(pool, "_qxid_to_item", None) if pool is not None else None
+    for e in session.question_history:
+        item = qxid_to_item.get(e.question_id) if qxid_to_item is not None else None
+        entries.append(ResumptionEntry(
+            question_x_id=e.question_id,
+            is_correct=e.is_correct,
+            item=item,
+            skill_id=e.skill_id,
+            operation=params.skill_to_operation.get(e.skill_id),
+            asked_at=e.asked_at,
+        ))
+    anchor = session.question_history[-1].question_id if session.question_history else None
+    return ResumptionToken(resume_anchor=anchor, budget_used=len(entries), answers=entries)
 
 
 def _stash_resolved(session: Session, skill_id: str, pick) -> QuestionRef:
@@ -278,14 +325,31 @@ def session_start(body: SessionStartRequest, request: Request):
     # Pick the first question and stash per-item overrides on the session
     # BEFORE saving, so the pending_* state is persisted alongside the rest
     # of the session document.
-    first_q = (
-        _pick_question_and_stash(
-            result.first_question, result.session, state.question_pool,
-            grade=body.grade, tenant_id=body.tenant_id,
+    _apply_switched_off(result.session, body)
+    try:
+        first_q = (
+            _pick_question_and_stash(
+                result.first_question, result.session, state.question_pool,
+                grade=body.grade, tenant_id=body.tenant_id,
+            )
+            if result.first_question is not None
+            else None
         )
-        if result.first_question is not None
-        else None
-    )
+    except NoQuestionForSkillError as exc:
+        # No usable question to start. When the caller supplied a switched-off
+        # list, this is a client-input condition (the list covers all available
+        # questions for the grade) - surface it as a specific, catchable 4xx
+        # (NO_USABLE_QUESTION) rather than a generic 500, so the app gets an
+        # unambiguous signal. It is deliberately NOT degraded to a silent
+        # all-uncertain "complete": an empty usable set means the diagnostic
+        # could not run, which is an error, not a completion. With no switched-off
+        # list this is a genuine pool/data gap, so the original error stands.
+        if result.session.switched_off_question_x_ids:
+            raise NoUsableQuestionError(
+                "no usable question to start the session: the switched-off list "
+                "may cover all available questions for the learner's grade"
+            ) from exc
+        raise
 
     state.storage.save_session(result.session)
     _record_metrics_on_start(request, body.tenant_id, body.grade)
@@ -302,11 +366,10 @@ def session_start(body: SessionStartRequest, request: Request):
         offline_tree_ref = registry.reference(
             body.tenant_id,
             body.grade,
-            state.engine_version,
             fetch_path=lambda t, g: f"{router.prefix}/offline-tree/{t}/{g}",
             warn=lambda t, g, av, rv: get_logger(__name__).warning(
-                f"offline_tree version drift for tenant={t} grade=g{g}: "
-                f"artifact {av} != engine {rv}; serving null offline_tree"
+                f"offline_tree compat-version drift for tenant={t} grade=g{g}: "
+                f"artifact tree_compat_version={av} != required {rv}; serving null offline_tree"
             ),
         )
 
@@ -315,6 +378,8 @@ def session_start(body: SessionStartRequest, request: Request):
         first_question=first_q,
         offline_tree=offline_tree_ref,
         question_budget=params.routing_config.total_budget,
+        resumption_token=_build_resumption_token(
+            result.session, state.question_pool, params),
     )
     return success_envelope(ID_SESSION_START, payload.model_dump())
 
@@ -359,6 +424,7 @@ def session_response(
         slip_override = session.pending_question_slip_override
         guess_override = session.pending_question_guess_override
 
+    _apply_switched_off(session, body)
     try:
         rr = record_response(
             session,
@@ -406,6 +472,7 @@ def session_response(
                     params.routing_config.total_budget - session.questions_total
                 ),
                 verdicts=None,
+                resumption_token=_build_resumption_token(session, state.question_pool, params),
             )
             return success_envelope(ID_SESSION_RESPONSE, payload.model_dump())
         # No pending question on an active session is not expected; fall through
@@ -427,6 +494,7 @@ def session_response(
                 params.routing_config.total_budget - session.questions_total
             ),
             verdicts=None,
+            resumption_token=_build_resumption_token(session, state.question_pool, params),
         )
     else:
         # Controller signalled completion: finalize (verdicts + status/ended_at).
@@ -560,7 +628,7 @@ def get_offline_tree(
     )
     registry = getattr(state, "offline_tree_registry", None)
     body = (
-        registry.tree_bytes(tenant_id, grade, state.engine_version)
+        registry.tree_bytes(tenant_id, grade)
         if registry is not None
         else None
     )
@@ -615,6 +683,196 @@ def get_session_responses(
         responses=responses,
     )
     return success_envelope(ID_SESSION_RESPONSES, payload.model_dump())
+
+
+@router.post("/session/{sub_session_id}/offline-batch")
+def offline_batch(
+    body: OfflineBatchRequest,
+    request: Request,
+    sub_session_id: str = Path(..., min_length=1),
+):
+    """Ingest a completed offline segment and return the next online question or
+    session-complete verdicts (mixed-mode v11 section 9). Appends the batch to
+    the session's ONE unified history, recomputes all state by a full replay
+    through the history scorer, then selects the next question once. Same
+    X-Internal-Service-Token tenant model as the other write endpoints."""
+    state = _app_state(request)
+    verify_tenant_token(
+        header_token=_header_token(request),
+        tenant_id=body.tenant_id,
+        tenant_tokens=state.tenant_tokens,
+    )
+    session = state.storage.get_session(sub_session_id)
+    if session is None:
+        raise SessionNotFoundError(
+            f"no engine session for sub_session_id '{sub_session_id}'")
+    if session.status != SessionStatus.ACTIVE:
+        raise SessionAlreadyEndedError(
+            f"session is {session.status.value}; submit a new session/start for a new session"
+        )
+    if session.learner_id != body.learner_id:
+        raise LearnerMismatchError(
+            f"learner_id '{body.learner_id}' does not match session's learner '{session.learner_id}'"
+        )
+
+    params = _build_engine_params(request, session.grade)
+    log = get_logger(__name__)
+
+    # Stale device tree at reconnect (v11 decision 3): accept the answers, flag it.
+    if body.tree_compat_version != REQUIRED_TREE_COMPAT_VERSION:
+        log.warning(
+            f"offline-batch stale tree for tenant={session.tenant_id} "
+            f"sub_session_id={sub_session_id}: batch tree_compat_version="
+            f"{body.tree_compat_version} != required {REQUIRED_TREE_COMPAT_VERSION}; "
+            f"accepting answers and flagging"
+        )
+
+    _apply_switched_off(session, body)
+    entries = [
+        OfflineAnswer(
+            question_x_id=a.question_x_id, skill_id=a.skill_id,
+            is_correct=a.is_correct, raw_response=a.raw_response, asked_at=a.asked_at,
+        )
+        for a in body.answers
+    ]
+
+    ingest = apply_offline_batch(
+        session,
+        resume_anchor=body.resume_anchor,
+        entries=entries,
+        tree_id=body.tree_id,
+        tree_version=body.tree_version,
+        cfg=state.config,
+        lattice=state.lattice_index,
+        pool=state.question_pool,
+        grade=session.grade,
+        tenant=session.tenant_id,
+    )
+    session = ingest.session
+
+    # Observability (v11 section 14).
+    metrics = getattr(state, "metrics", None)
+    if metrics is not None:
+        metrics.offline_sync_events_total.labels(
+            tenant_id=body.tenant_id, outcome="applied").inc()
+    if ingest.dedup_count:
+        log.warning(f"offline-batch de-duped {ingest.dedup_count} doubly-answered "
+                    f"item(s) for sub_session_id={sub_session_id} (delayed-sync path)")
+    if ingest.anchor_not_found:
+        log.warning(f"offline-batch resume_anchor not found for sub_session_id="
+                    f"{sub_session_id}; tail-appended and flagged (stacked-delay)")
+    if ingest.skipped_qids:
+        log.warning(f"offline-batch skipped {len(ingest.skipped_qids)} entr(y/ies) with "
+                    f"no calibration for sub_session_id={sub_session_id} (corruption/hard-delete)")
+    if ingest.over_budget:
+        log.warning(f"offline-batch over budget for sub_session_id={sub_session_id}: "
+                    f"{session.questions_total} answers > grade budget "
+                    f"{params.routing_config.total_budget}; accepted and flagged")
+
+    # Select the next online question once, from the fully-updated unified state.
+    next_res = select_next_coverage(session, params, state.question_pool)
+    if next_res is not None:
+        skill_id, pick = next_res
+        next_q = _stash_resolved(session, skill_id, pick)
+        state.storage.save_session(session)
+        payload = SessionResponseResult(
+            session_complete=False,
+            next_question=next_q,
+            questions_asked_so_far=session.questions_total,
+            questions_remaining_budget=(
+                params.routing_config.total_budget - session.questions_total
+            ),
+            verdicts=None,
+            resumption_token=_build_resumption_token(session, state.question_pool, params),
+        )
+    else:
+        verdicts = finalize_session(session, params)
+        state.storage.save_session(session)
+        state.storage.save_verdicts(session, verdicts or [])
+        _record_metrics_on_complete(request, session, end_reason="natural")
+        _record_metrics_on_verdicts(request, session, verdicts or [])
+        payload = SessionResponseResult(
+            session_complete=True,
+            next_question=None,
+            questions_asked_so_far=session.questions_total,
+            questions_remaining_budget=(
+                params.routing_config.total_budget - session.questions_total
+            ),
+            verdicts=[_verdict_to_payload(v) for v in (verdicts or [])],
+            misconception_signals=_build_misconception_signals(
+                session, state.question_pool, state.config.misconception
+            ),
+        )
+    return success_envelope(ID_OFFLINE_BATCH, payload.model_dump())
+
+
+@router.post("/session/{sub_session_id}/replace-question")
+def replace_question(
+    body: ReplaceQuestionRequest,
+    request: Request,
+    sub_session_id: str = Path(..., min_length=1),
+):
+    """Decline the offered question and return a different one (Deactivation
+    Failsafe mechanism 2, spec section 5). The declined question_x_id joins a
+    transient per-session set (separate from the switched-off list); selection is
+    re-run for this turn excluding it together with the switched-off, retired, and
+    answered exclusions. No answer is recorded, no budget is consumed, and the
+    declined question is not offered again this session. If no usable question
+    remains, the session completes/advances exactly as when selection is
+    otherwise exhausted - no new terminal behaviour."""
+    state = _app_state(request)
+    verify_tenant_token(
+        header_token=_header_token(request),
+        tenant_id=body.tenant_id,
+        tenant_tokens=state.tenant_tokens,
+    )
+    session = state.storage.get_session(sub_session_id)
+    if session is None:
+        raise SessionNotFoundError(
+            f"no engine session for sub_session_id '{sub_session_id}'")
+    if session.status != SessionStatus.ACTIVE:
+        raise SessionAlreadyEndedError(
+            f"session is {session.status.value}; submit a new session/start for a new session")
+    if session.learner_id != body.learner_id:
+        raise LearnerMismatchError(
+            f"learner_id '{body.learner_id}' does not match session's learner '{session.learner_id}'")
+
+    params = _build_engine_params(request, session.grade)
+    # Transient decline: never persisted beyond the session, never merged into the
+    # switched-off list; the declined question is not re-offered this session.
+    session.declined_question_x_ids = set(session.declined_question_x_ids) | {body.question_x_id}
+    session.pending_question_id = None                  # drop the declined pending, re-select
+    next_res = select_next_coverage(session, params, state.question_pool)
+    if next_res is not None:
+        skill_id, pick = next_res
+        next_q = _stash_resolved(session, skill_id, pick)
+        state.storage.save_session(session)
+        payload = SessionResponseResult(
+            session_complete=False,
+            next_question=next_q,
+            questions_asked_so_far=session.questions_total,
+            questions_remaining_budget=(
+                params.routing_config.total_budget - session.questions_total),
+            verdicts=None,
+            resumption_token=_build_resumption_token(session, state.question_pool, params),
+        )
+    else:
+        verdicts = finalize_session(session, params)
+        state.storage.save_session(session)
+        state.storage.save_verdicts(session, verdicts or [])
+        _record_metrics_on_complete(request, session, end_reason="natural")
+        _record_metrics_on_verdicts(request, session, verdicts or [])
+        payload = SessionResponseResult(
+            session_complete=True,
+            next_question=None,
+            questions_asked_so_far=session.questions_total,
+            questions_remaining_budget=(
+                params.routing_config.total_budget - session.questions_total),
+            verdicts=[_verdict_to_payload(v) for v in (verdicts or [])],
+            misconception_signals=_build_misconception_signals(
+                session, state.question_pool, state.config.misconception),
+        )
+    return success_envelope(ID_REPLACE_QUESTION, payload.model_dump())
 
 
 # === Health and metrics =====================================================

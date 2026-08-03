@@ -28,6 +28,8 @@ class ErrorCode(str, Enum):
     SESSION_NOT_COMPLETE = "SESSION_NOT_COMPLETE"
     RESPONSE_CONFLICT = "RESPONSE_CONFLICT"
     NO_TREE_FOR_GRADE = "NO_TREE_FOR_GRADE"
+    OFFLINE_BATCH_TOO_LARGE = "OFFLINE_BATCH_TOO_LARGE"
+    NO_USABLE_QUESTION = "NO_USABLE_QUESTION"
     NO_QUESTION_FOR_SKILL = "NO_QUESTION_FOR_SKILL"
     VERDICTS_NOT_WRITTEN = "VERDICTS_NOT_WRITTEN"
     SESSION_LOCKED = "SESSION_LOCKED"
@@ -46,6 +48,8 @@ HTTP_STATUS: dict = {
     ErrorCode.SESSION_NOT_COMPLETE: 409,
     ErrorCode.RESPONSE_CONFLICT: 409,
     ErrorCode.NO_TREE_FOR_GRADE: 404,
+    ErrorCode.OFFLINE_BATCH_TOO_LARGE: 400,
+    ErrorCode.NO_USABLE_QUESTION: 422,
     ErrorCode.NO_QUESTION_FOR_SKILL: 500,
     ErrorCode.VERDICTS_NOT_WRITTEN: 500,
     ErrorCode.SESSION_LOCKED: 503,
@@ -111,6 +115,14 @@ class SessionNotCompleteError(EngineApiError):
 
 class ResponseConflictError(EngineApiError):
     code = ErrorCode.RESPONSE_CONFLICT
+
+
+class OfflineBatchTooLargeError(EngineApiError):
+    code = ErrorCode.OFFLINE_BATCH_TOO_LARGE
+
+
+class NoUsableQuestionError(EngineApiError):
+    code = ErrorCode.NO_USABLE_QUESTION
 
 
 class NoTreeForGradeError(EngineApiError):
