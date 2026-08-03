@@ -83,7 +83,7 @@ The dynamic engine fixes both. It adapts question selection based on running est
 
 To enable this change, the following content logic / rules need to be implemented:
 - if the verdict for the ‘2-digit addition without carry’ skills is either uncertain or confident_not_mastered in the Dynamic Diagnostic (i.e., the recommendation for ‘2-digit addition without carry’ is either take_maind_diagnostic or take_maind_confirmation), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’.
-- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’. |
+- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner should skip the MainD for both ‘Numbers’ and ‘2-digit addition without carry’. |
 | Cold-start offline support | Learners must be online at session start. The PWA work to support a completely offline first launch is not yet ready and is a separate decision |
 | Item authoring or content editing | The engine reads existing questions; it does not create or modify them |
 | Question rendering | `aml-portal` renders questions. The engine never sees question content, only `question_x_id`s |
@@ -1661,7 +1661,7 @@ These are the engine's known weaknesses, carried forward from the design documen
 
 To enable this change, the following content logic / rules need to be implemented:
 - if the verdict for the ‘2-digit addition without carry’ skills is either uncertain or confident_not_mastered in the Dynamic Diagnostic (i.e., the recommendation for ‘2-digit addition without carry’ is either take_maind_diagnostic or take_maind_confirmation), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’.
-- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’. |
+- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner should skip the MainD for both ‘Numbers’ and ‘2-digit addition without carry’. |
 | 8 | **G6-G8 use G5 inputs, unmeasured for older learners.** Grades 6, 7, and 8 are scored with the G5 skill set, question budget, and G5-derived Delhi priors (Section 2). Older learners may differ systematically (different forgetting and profile patterns) from the G5 population the priors were measured on; treat G6-G8 verdicts with corresponding caution until their own data is available. |
 
 ---

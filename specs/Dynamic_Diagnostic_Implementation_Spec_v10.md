@@ -89,7 +89,7 @@ Please note that the Numbers operation has been dropped from the Dynamic Diagnos
 
 To enable this change, the following content logic / rules need to be implemented:
 - if the verdict for the ‘2-digit addition without carry’ skills is either uncertain or confident_not_mastered in the Dynamic Diagnostic (i.e., the recommendation for ‘2-digit addition without carry’ is either take_maind_diagnostic or take_maind_confirmation), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’.
-- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner needs to take the MainD for both ‘Numbers’ and ‘2-digit addition without carry’.
+- if the verdict for ‘2-digit addition without carry’ is confident_mastered in the Dynamic Diagnostic (i.e., recommendation for ‘2-digit addition without carry’ is skip_maind), then the learner should skip the MainD for both ‘Numbers’ and ‘2-digit addition without carry’.
 
 ### 4.6 Phase 1 acceptance criteria
 
